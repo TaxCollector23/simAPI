@@ -1,0 +1,97 @@
+---
+title: "CLI"
+description: "Validate simulations from the terminal."
+icon: "terminal"
+---
+
+The `simapi` CLI validates simulation files from the terminal or CI, with a
+browser-based login flow.
+
+## Install
+
+<CodeGroup>
+
+```bash curl (macOS/Linux)
+curl -fsSL https://sim-api.vercel.app/install.sh | sh
+```
+
+```powershell PowerShell (Windows)
+irm https://sim-api.vercel.app/install.ps1 | iex
+```
+
+```bash Homebrew
+brew install TaxCollector23/tap/simapi
+```
+
+```bash npm
+npm install -g simapi-cli
+```
+
+</CodeGroup>
+
+## Log in
+
+```bash
+simapi login
+```
+
+Opens `https://sim-api.vercel.app/auth?cli=true`, you sign in with Google or email,
+copy your API key, and paste it back in the terminal. The key is verified and saved
+to `~/.simapi/config.json`. `SIMAPI_API_KEY` overrides it in CI.
+
+## Commands
+
+<CodeGroup>
+
+```bash Validate
+simapi init                      # write a sample simapi.json
+simapi validate simulation.json  # score, status, warnings, violations, time
+simapi validate run.json --type structural --json
+simapi watch simulation.json     # re-validate on every change
+```
+
+```bash Account
+simapi whoami                    # account, plan, masked key
+simapi usage                     # requests today/month, quota, avg time
+simapi logout
+```
+
+```bash API keys
+simapi api-key show
+simapi api-key rotate            # new key, invalidates the old one
+simapi api-key delete
+```
+
+```bash Config
+simapi config                    # show current configuration
+simapi config set fail_on warning
+simapi version
+simapi help
+simapi <command> --help
+```
+
+</CodeGroup>
+
+## Report output
+
+```text
+  Validation report  simulation.json
+  ──────────────────────────────────────────────
+  Validation score       35
+  Status                 FAILED
+  Warnings               0
+  Constraint violations  1
+  Physics violations     0
+  Execution time         5.1ms
+```
+
+## Options
+
+<ParamField path="--type <domain>" type="string" default="aerodynamics">Simulation domain.</ParamField>
+<ParamField path="--json" type="flag">Print the raw JSON response.</ParamField>
+<ParamField path="--fail-on <level>" type="string">Exit non-zero on `warning` or `failed` (for CI).</ParamField>
+
+## Environment
+
+<ParamField path="SIMAPI_API_KEY" type="string">Overrides the saved key.</ParamField>
+<ParamField path="SIMAPI_BASE_URL" type="string" default="https://sim-api.vercel.app/api">API base URL.</ParamField>
