@@ -2,16 +2,17 @@
 
 # SimAPI
 
-### The CI/CD layer for engineering simulations.
+### Validate simulation data before it reaches AI training or robotics.
 
-Automatically validate CFD, FEA, multiphysics, and robotics simulation output
-against physical laws — before it reaches a design decision or an ML training set.
+Simulation CI/CD for Physical AI and robotics. Check simulation data against
+physical laws, catch bad runs, and gate what reaches training or autonomy.
+Use SimAPI from the web dashboard, CLI, or SDK.
 
-[![CI](https://img.shields.io/badge/CI-passing-brightgreen)](.github/workflows/ci.yml)
+[![CI](https://github.com/TaxCollector23/simAPI/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
-[![Checks](https://img.shields.io/badge/physics%20checks-280%2B-orange)](core/physics_validator.py)
-[![Domains](https://img.shields.io/badge/domains-21-purple)](core/physics_validator.py)
+
+[Open the SimAPI dashboard](https://sim-api.vercel.app/dashboard) · [Read the docs](https://sim-api.vercel.app/docs) · [Use the CLI](https://sim-api.vercel.app/docs/sdks/cli)
 
 </div>
 
@@ -19,183 +20,97 @@ against physical laws — before it reaches a design decision or an ML training 
 
 ## Why SimAPI
 
-Engineering organizations run thousands of simulations. Today a human engineer
-eyeballs the output before anyone trusts it. That manual gate is slow, subjective,
-and doesn't scale — and bad simulation data silently poisons downstream design
-decisions and ML models.
+Physical AI and robotics depend on simulated worlds: synthetic sensor data,
+scenarios, trajectories, and solver outputs. A plausible looking run can still
+break physical constraints, contain unit mistakes, or carry bad values into a
+training set or autonomy stack.
 
-**SimAPI is the automated validation gate.** Point it at simulation output and it
-returns a trustworthy verdict in milliseconds:
+SimAPI is a hosted validation service for that gap. Send it simulation data and
+get a structured verdict you can inspect in the dashboard or use as a CI gate.
+The deterministic checks cover physical plausibility, conservation, dimensions,
+relationships between variables, statistical consistency, and outliers. An
+optional AI review adds a second pass over the result.
 
-- **Physics engine** — 280+ deterministic checks across 21 domains: plausibility
-  bounds, conservation laws, dimensional consistency, cross-variable relationships,
-  statistical distribution, outlier detection, and domain-specific rules.
-- **AI reasoning layer** *(optional)* — a second-pass LLM review that catches what
-  rules miss: magnitude realism, distribution-shape red flags, dataset-provenance
-  artifacts, and ML-readiness concerns.
+### Built for two workflows
 
-Think **GitHub Actions for simulations**, **Stripe for simulation validation**,
-**Cloudflare for engineering trust**.
+- **Physical AI:** validate synthetic and simulated data before using it to train
+  or evaluate models. Check the `training_ready` result and inspect warnings.
+- **Robotics:** validate simulated sensor, motion, and environment outputs before
+  they enter autonomy and planning pipelines. Fail a run when its verdict does
+  not meet your configured threshold.
 
-## Quickstart
+## Use SimAPI
 
-```bash
-# 1. Install
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+SimAPI runs as a hosted service. You do not need to deploy or maintain the API.
+Choose the interface that fits your workflow:
 
-# 2. Configure (optional in dev)
-cp .env.example .env
+| Interface | Use it for |
+| --- | --- |
+| [Web dashboard](https://sim-api.vercel.app/dashboard) | Get an API key, try validation, and review results. |
+| [CLI](https://sim-api.vercel.app/docs/sdks/cli) | Validate files locally or add a pass/fail check to CI. |
+| [SDK and REST API](https://sim-api.vercel.app/docs) | Call validation from Python, Node.js, or your own application. |
 
-# 3. Run the API + dashboard
-python launch.py            # API on :8000, docs at /docs
+### Validate from CI with the CLI
 
-# 4. Try it
-curl -X POST http://localhost:8000/v1/demo | jq .status
-```
-
-### With Docker
+Install the CLI, authenticate once, then add a validation step to your workflow:
 
 ```bash
-docker compose up --build   # one command, production image
+npm install -g simapi-cli
+simapi login
+simapi validate simulation.json --type robotics --fail-on warning
 ```
 
-## Using the SDK
+In CI, provide `SIMAPI_API_KEY` as a secret instead of using interactive login.
+`SIMAPI_BASE_URL` defaults to the hosted SimAPI API. See the [CLI guide](https://sim-api.vercel.app/docs/sdks/cli)
+for install options and command details.
 
-```python
-import simapi
-
-result = simapi.validate(
-    data="cfd_output.csv",
-    simulation_type="aerodynamics",
-    conditions={"velocity": 15.0, "altitude": 120.0},
-)
-
-print(result.summary())
-print(result.status)             # "passed" | "warning" | "failed"
-print(result.training_ready)     # True / False
-print(result.drag_coefficient)   # StatResult(mean=0.312, std=0.018, n=196)
-```
-
-Set `SIMAPI_BASE_URL` and `SIMAPI_API_KEY` to point the SDK at a remote deployment.
-
-## API
-
-Interactive docs are served at `/docs` (Swagger UI) and `/redoc`; the raw schema
-is at `/openapi.json`.
-
-| Method | Path | Description |
-| ------ | ---- | ----------- |
-| `GET`  | `/v1/health` | Liveness + service facts (unauthenticated) |
-| `GET`  | `/v1/metrics` | Prometheus metrics |
-| `POST` | `/v1/validate` | Validate a JSON batch of trials |
-| `POST` | `/v1/validate/upload` | Validate an uploaded CSV/JSON/VTK/NumPy/OpenFOAM file |
-| `POST` | `/v1/validate/physics-only` | Physics checks only (skip AI) |
-| `POST` | `/v1/demo` | Validate seeded synthetic data |
-| `GET`  | `/v1/job/{id}` | Fetch a job's physics result |
-| `GET`  | `/v1/job/{id}/ai` | Poll for the async AI result |
-| `GET`  | `/v1/jobs?limit=&offset=` | List recent jobs (paginated) |
-
-**Consistent error contract.** Every error returns the same envelope with a stable
-`code`, a message, and a `request_id` that correlates to the server logs:
-
-```json
-{ "error": { "code": "rate_limited", "message": "Rate limit exceeded. Slow down and retry.", "request_id": "3f9c…" } }
-```
-
-## Architecture
-
-```
-                ┌──────────────────────────────────────────────┐
-   client ───▶  │  FastAPI (api/server.py)                     │
-   SDK / curl   │   middleware: request-id · logging · metrics │
-                │   deps:       auth · rate limit               │
-                │   handlers:   consistent error envelope       │
-                └───────┬───────────────────────┬──────────────┘
-                        │                        │
-        ┌───────────────▼──────────┐   ┌─────────▼──────────────┐
-        │ core/ingestion.py        │   │ core/physics_validator │
-        │ format detect + 400      │   │ 53 layers, 280+ checks │
-        │ column-alias normalize   │   │ 21 simulation domains  │
-        └───────────────┬──────────┘   └─────────┬──────────────┘
-                        └── DataFrame ───────────▶│  synchronous verdict
-                                                  │
-                                        ┌─────────▼──────────────┐
-                                        │ core/ai_validator.py   │
-                                        │ async LLM second pass  │
-                                        │ (polled via /job/…/ai) │
-                                        └────────────────────────┘
-```
-
-- **`api/config.py`** — immutable, env-sourced settings (12-factor).
-- **`api/security.py`** — API-key auth (constant-time) + token-bucket rate limiter.
-- **`api/observability.py`** — JSON logging, request-id context, metrics registry.
-- **`api/errors.py`** — typed errors → one JSON envelope with stable codes.
-
-## Configuration
-
-All configuration is environment-driven; see [`.env.example`](.env.example) for the
-full list. Highlights:
-
-| Variable | Default | Purpose |
-| -------- | ------- | ------- |
-| `SIMAPI_REQUIRE_AUTH` | `false` | Enforce API-key auth |
-| `SIMAPI_API_KEYS` | — | Comma-separated accepted keys |
-| `SIMAPI_RATE_LIMIT_RPM` | `120` | Sustained requests/minute per caller |
-| `SIMAPI_CORS_ORIGINS` | `*` | Allowed CORS origins |
-| `SIMAPI_OPENROUTER_API_KEY` | — | Enables the AI layer when set |
-
-## Deployment
-
-The image is a standard, non-root, health-checked container and runs anywhere
-containers run:
+### Call the API from an application
 
 ```bash
-docker build -t simapi:latest .
-docker run -p 8000:8000 --env-file .env simapi:latest
+curl -X POST https://sim-api.vercel.app/api/v1/validate \
+  -H "X-API-Key: $SIMAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "simulation_type": "robotics",
+    "data": [
+      { "condition_number": 12.4, "workspace_volume": 0.84, "end_effector_velocity": 0.42 },
+      { "condition_number": 13.1, "workspace_volume": 0.82, "end_effector_velocity": 0.39 }
+    ]
+  }'
 ```
 
-- **Render / Railway / Fly.io** — deploy the Dockerfile directly; set env vars in
-  the dashboard.
-- **AWS / Azure / GCP** — push to a registry and run on ECS/Fargate, Cloud Run, or
-  Container Apps; scrape `/v1/metrics`, health-check `/v1/health`.
-- **Kubernetes** — use `/v1/health` for liveness/readiness probes and the
-  Prometheus endpoint for HPA signals.
+The response includes a `passed`, `warning`, or `failed` status, the checks and
+issues behind it, and whether the data is marked `training_ready`. See the
+[API quickstart](https://sim-api.vercel.app/docs/quickstart) for Python and
+Node.js examples.
 
-## Repository layout
+## What gets checked
 
-| Path | What |
-| ---- | ---- |
-| `api/` · `core/` · `sdk/` | Production FastAPI service, validation engine, Python SDK |
-| `tests/` | Pytest suite (API contract + unit) |
-| `web/` | Marketing site — Next.js 15 + Tailwind + Framer Motion (interactive demo & API playground) |
-| `docs-site/` | Mintlify developer documentation |
-| `dashboard/` | Static demo dashboard |
+- Physical plausibility and domain-specific bounds
+- Conservation laws and dimensional consistency
+- Cross-variable and statistical relationships
+- Outliers and anomalous distributions
+- Optional AI review for a second opinion
 
-## Development
+Validation returns a structured result that you can inspect or use to continue,
+warn, or fail a pipeline. Treat the verdict as a quality signal for simulation
+data; it does not certify a physical system or replace engineering review.
+
+## For contributors
+
+The hosted service is the normal way to use SimAPI. To work on the service itself,
+clone the repository and run the local development environment:
 
 ```bash
-make dev        # deps + pre-commit hooks
-make test       # run the suite
-make cov        # coverage report
-make lint       # ruff
-make typecheck  # mypy
-
-# Marketing site
-cd web && npm install && npm run dev        # http://localhost:3000
-
-# Docs (Mintlify)
-cd docs-site && mint dev                     # http://localhost:3000
+git clone https://github.com/TaxCollector23/simAPI.git
+cd simAPI
+make dev
+make test
+python launch.py  # local API at http://localhost:8000
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and how to add a new
-simulation domain.
-
-## Roadmap
-
-Async job queue and durable storage · organizations / projects / RBAC · usage
-dashboard and billing · webhooks · baseline & regression detection · custom
-validation-rule plugins. See [CHANGELOG.md](CHANGELOG.md) for shipped work.
+The repository includes the API, validation engine, SDKs, CLI, dashboard, docs,
+and tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance.
 
 ## License
 

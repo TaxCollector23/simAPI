@@ -1,6 +1,6 @@
 ---
 title: "Introduction"
-description: "The CI/CD layer for engineering simulations."
+description: "Validate simulation data before it reaches AI training or robotics."
 icon: "hand-wave"
 ---
 
@@ -12,13 +12,11 @@ icon: "hand-wave"
 
 ## What is SimAPI?
 
-Engineering teams trust software because software has **automated testing**.
-Engineering simulations have had no equivalent — until now.
-
-**SimAPI automatically validates CFD, FEA, robotics, multiphysics, and scientific
-simulations** before they reach production, design review, or machine-learning
-pipelines. Point it at simulation output and it returns a trustworthy verdict in
-milliseconds.
+**SimAPI validates every simulation before it trains an AI or moves a robot.**
+It is hosted simulation CI/CD for Physical AI and robotics: send simulated data,
+check it against physical constraints, then use the result in training, evaluation,
+or an autonomy pipeline. Use the web dashboard, CLI, or SDK; you do not need to
+self-host the service.
 
 <CardGroup cols={2}>
   <Card title="Deterministic physics engine" icon="cpu">
@@ -34,8 +32,8 @@ milliseconds.
     pagination. Everything is an endpoint.
   </Card>
   <Card title="Enterprise-ready" icon="shield-check">
-    API keys, rate limiting, audit logs, SSO, and private / air-gapped
-    deployment for regulated teams.
+    A hosted API, API keys, rate limits, and structured results for integrating
+    validation into your tools and workflows.
   </Card>
 </CardGroup>
 
@@ -67,6 +65,6 @@ milliseconds.
 </CardGroup>
 
 <Note>
-  New here? The [Quickstart](/quickstart) gets you from zero to your first
-  validated dataset in about three minutes.
+  New here? The [Quickstart](/quickstart) shows how to validate a dataset through
+  the hosted service.
 </Note>

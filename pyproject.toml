@@ -1,7 +1,7 @@
 [project]
 name = "simapi"
 version = "3.1.0"
-description = "The CI/CD layer for engineering simulations — automated physics + AI validation."
+description = "Simulation CI/CD for Physical AI and robotics: validate every simulation before it trains an AI or moves a robot."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/TaxCollector23/SimAPI-YC-"
+Homepage = "https://github.com/TaxCollector23/simAPI"
 
 [tool.ruff]
 line-length = 110

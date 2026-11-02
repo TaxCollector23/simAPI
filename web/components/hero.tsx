@@ -15,7 +15,7 @@ const item = {
 };
 
 export function Hero() {
-  const proofPoints = ["CFD, FEA, robotics", "CLI, SDK, REST API", "CI fail gates"];
+  const proofPoints = ["Physical AI", "Robotics", "Web, CLI, SDK"];
 
   return (
     <section className="relative overflow-hidden pt-36 pb-16 sm:pt-40">
@@ -31,7 +31,7 @@ export function Hero() {
           <motion.div variants={item}>
             <span className="eyebrow">
               <span className="h-1.5 w-1.5 rounded-full bg-accent-cyan animate-pulse-soft" />
-              Simulation validation
+              Simulation CI/CD for Physical AI and robotics
             </span>
           </motion.div>
 
@@ -39,23 +39,21 @@ export function Hero() {
             variants={item}
             className="mt-7 w-full text-balance text-3xl font-semibold leading-[1.08] tracking-tight text-white sm:text-6xl md:text-[68px]"
           >
-            Your solver won&apos;t tell you the run is{" "}
-            <span className="text-gradient">wrong</span>.
-            <br className="hidden sm:block" /> SimAPI will.
+            Validate simulation data before it reaches AI training or robotics.
           </motion.h1>
 
           <motion.p
             variants={item}
             className="mt-6 w-full max-w-2xl text-base leading-relaxed text-white/60 sm:text-lg"
           >
-            SimAPI checks simulation output and setup against physical law — catching
-            diverged runs, unit-conversion slips, sensor drift, and impossible values
-            before the data reaches a design review, an autonomy stack, or an ML pipeline.
+            Catch bad simulation data before it reaches a Physical AI training set or robotics
+            autonomy stack. SimAPI checks outputs against physical constraints, then gives
+            your team a result to review in the dashboard or gate in code.
           </motion.p>
 
           <motion.div variants={item} className="mt-9 flex w-full flex-wrap items-center justify-center gap-3">
             <Link href="/dashboard" className="btn-accent">
-              <KeyRound className="h-4 w-4" /> Get API Key
+              <KeyRound className="h-4 w-4" /> Open dashboard
             </Link>
             <Link href="/docs" className="btn-ghost">
               <Terminal className="h-4 w-4" /> View Documentation

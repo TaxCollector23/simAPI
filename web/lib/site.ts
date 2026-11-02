@@ -2,10 +2,10 @@ export const site = {
   name: "SimAPI",
   domain: "sim-api.vercel.app",
   url: "https://sim-api.vercel.app",
-  tagline: "CI checks for engineering simulations.",
+  tagline: "Validate simulation data before it reaches AI training or robotics.",
   description:
-    "Validate CFD, FEA, robotics, and multiphysics simulation outputs with deterministic physics checks, statistical analysis, and AI review before they reach production, design review, or ML pipelines.",
-  github: "https://github.com/TaxCollector23/SimAPI-YC-",
+    "Simulation CI/CD for Physical AI and robotics. Validate simulation data against physical constraints before it trains a model or reaches an autonomy stack. Use the hosted service from the web dashboard, CLI, or SDK.",
+  github: "https://github.com/TaxCollector23/simAPI",
   nav: [
     { label: "Platform", href: "/platform" },
     { label: "Benchmarks", href: "/benchmark" },
@@ -32,7 +32,7 @@ export const site = {
       items: [
         { label: "Documentation", href: "/docs", desc: "Quick start, API reference, CLI." },
         { label: "API reference", href: "https://simapidocs.github.io", desc: "Full endpoint docs.", external: true },
-        { label: "GitHub", href: "https://github.com/TaxCollector23/SimAPI-YC-", desc: "Source, issues, and PRs.", external: true },
+        { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI", desc: "Source, issues, and PRs.", external: true },
         { label: "npm — simapi-cli", href: "https://www.npmjs.com/package/simapi-cli", desc: "`npm install -g simapi-cli`", external: true },
       ],
     },
@@ -60,7 +60,7 @@ export const site = {
     { title: "Developers", links: [
       { label: "Documentation", href: "/docs" },
       { label: "API reference", href: "https://simapidocs.github.io" },
-      { label: "GitHub", href: "https://github.com/TaxCollector23/SimAPI-YC-" },
+      { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
       { label: "npm", href: "https://www.npmjs.com/package/simapi-cli" },
     ] },
     { title: "Company", links: [
