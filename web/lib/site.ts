@@ -4,7 +4,7 @@ export const site = {
   url: "https://simapilander.vercel.app",
   tagline: "Simulations you can trust",
   description:
-    "Simulation checks for robot arms and Physical AI. Find bad samples before you use them.",
+    "Robotics validation for trajectories, joint limits, tool data, and Physical AI workflows.",
   github: "https://github.com/TaxCollector23/simAPI",
   nav: [
     { label: "Use cases", href: "/use-cases" },

@@ -23,10 +23,10 @@ export function RoboticsCapabilities() {
         <div className="container-tight">
           <div className="grid gap-10 lg:grid-cols-[.8fr_1.2fr] lg:gap-20">
             <div>
-              <h2 className="max-w-md text-balance text-3xl font-medium leading-tight sm:text-4xl">Catch the jumps you might miss.</h2>
-              <p className="mt-6 max-w-md text-base leading-7 text-white/65">A joint can stay within its range and still move too fast between samples. SimAPI checks for both.</p>
+              <h2 className="max-w-md text-balance text-3xl font-medium leading-tight sm:text-4xl">Catch motion and data issues early.</h2>
+              <p className="mt-6 max-w-md text-base leading-7 text-white/65">Check joint limits, trajectory continuity, timing, and agreement between recorded and derived motion.</p>
               <Link href="/play" className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-accent-cyan hover:underline">Take a closer look <ArrowUpRight size={16} /></Link>
-              <p className="mt-8 max-w-md border-t border-white/10 pt-5 text-sm leading-6 text-white/55">Use seconds for time and matching units in your data and settings. These checks help you review a run; they don’t certify an arm for use.</p>
+              <p className="mt-8 max-w-md border-t border-white/10 pt-5 text-base leading-7 text-white/65">Use seconds and consistent units. SimAPI helps validate recorded data; it does not certify hardware or guarantee safe operation.</p>
             </div>
             <dl className="border-t border-white/10">
               {checks.map(([title, copy], index) => <div key={title} className="grid grid-cols-[28px_1fr] gap-4 border-b border-white/10 py-5">
@@ -40,12 +40,12 @@ export function RoboticsCapabilities() {
 
       <section className="border-b border-white/10 py-20 sm:py-28">
         <div className="container-tight">
-          <h2 className="max-w-2xl text-balance text-3xl font-medium sm:text-4xl">From a saved run to a clear answer.</h2>
+          <h2 className="max-w-2xl text-balance text-3xl font-medium sm:text-4xl">One validation flow, from data to deployment.</h2>
           <ol className="mt-10 grid gap-8 border-y border-white/10 py-8 sm:grid-cols-2 lg:grid-cols-4">
             {workflow.map(([title, copy]) => <li key={title}><h3 className="text-xl font-medium">{title}</h3><p className="mt-3 text-sm leading-6 text-white/65">{copy}</p></li>)}
           </ol>
           <div className="mt-10 grid items-start gap-8 lg:grid-cols-[.8fr_1.2fr] lg:gap-20">
-            <div><h3 className="text-xl font-medium">Save your settings. Use them again.</h3><p className="mt-3 text-sm leading-7 text-white/65">Set up your arm once, then use the same settings file in your browser or terminal.</p><p className="mt-4 text-sm leading-6 text-white/55">Example settings. Use the values and units for your arm.</p></div>
+            <div><h3 className="text-xl font-medium">Reuse your validation profile.</h3><p className="mt-3 text-base leading-7 text-white/65">Define limits and timing checks once. Apply the same profile in the browser, CLI, or SDK.</p></div>
             <div className="overflow-hidden rounded-lg border border-white/10 bg-ink-900">
               <p className="border-b border-white/10 px-5 py-3 font-mono text-sm text-white/55">arm-profile.json</p>
               <pre className="overflow-x-auto p-5 font-mono text-sm leading-7 text-[#24241f]">{`{

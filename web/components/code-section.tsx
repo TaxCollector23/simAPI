@@ -12,14 +12,14 @@ export function CodeSection() {
     <section className="border-b border-white/10 py-20 sm:py-28">
       <div className="container-tight">
         <div className="max-w-2xl">
-          <p className="landing-page-kicker">Made for robot arms</p>
-          <h2 className="mt-3 text-balance text-3xl font-medium sm:text-4xl">Your arm. Your limits.</h2>
+          <p className="landing-page-kicker">Built for robotics</p>
+          <h2 className="mt-3 text-balance text-3xl font-medium sm:text-4xl">Validate the full robotics workflow.</h2>
           <p className="mt-5 text-base leading-7 text-white/65">
-            Add your arm’s limits. SimAPI checks its movement and tool readings, then shows you which samples need a closer look.
+            Check trajectories, joint limits, timing, tool readings, and training data with one repeatable validation flow.
           </p>
         </div>
         <p className="mt-5 max-w-2xl text-sm leading-6 text-white/65">
-          Start in your browser, then use the same checks in your own workflow.
+          Start in the browser, then run the same checks from your CLI or SDK.
         </p>
         <div className="mt-12 grid border-y border-white/10 md:grid-cols-3">
           {entryPoints.map((item, index) => (

@@ -99,14 +99,7 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .hero-access { margin: 20px 0 0; color: var(--ink-muted); font-size: 14px; line-height: 20px; }
 
 .trajectory-figure { min-width: 0; margin: 0; padding-top: 12px; }
-.trajectory-caption { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 0 0 13px; border-bottom: 1px solid var(--line); color: var(--ink-secondary); font-size: 14px; }
-.trajectory-caption span:last-child { color: var(--ink-muted); font-family: var(--font-mono), monospace; font-size: 12px; }
-.trajectory-plot { display: block; width: 100%; height: auto; margin-top: 14px; overflow: visible; }
-.plot-axis { fill: #625f56; font-family: var(--font-mono), monospace; font-size: 13px; }
-.plot-note { fill: #625f56; font-family: var(--font-mono), monospace; font-size: 12px; }
-.plot-callout { fill: #934719; font-family: var(--font-mono), monospace; font-size: 13px; }
-.plot-tick { fill: #747168; font-family: var(--font-mono), monospace; font-size: 12px; }
-.trajectory-note { margin: 2px 0 0; color: var(--ink-muted); font-size: 13px; line-height: 20px; }
+.trajectory-plot { display: block; width: 100%; height: auto; overflow: visible; }
 
 .landing-page section:not(.landing-hero) { border-color: var(--line); }
 .landing-page .text-white, .landing-page h2, .landing-page h3, .landing-page th { color: var(--ink) !important; }
@@ -230,8 +223,6 @@ body:has(.dashboard-theme) { background: #f6f3ec; color: #24241f; }
   .hero-actions { margin-top: 24px; }
   .hero-access { margin-top: 16px; }
   .trajectory-figure { margin-inline: -4px; }
-  .trajectory-caption { font-size: 13px; }
-  .trajectory-note { font-size: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
