@@ -3,20 +3,18 @@ import { ArrowUpRight } from "lucide-react";
 
 export function Cta() {
   return (
-    <section className="py-20 sm:py-28">
-      <div className="container-tight grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
-        <div>
-          <p className="text-sm font-medium text-accent-cyan">Next step</p>
-          <h2 className="mt-4 max-w-2xl text-balance text-3xl font-medium leading-tight text-white sm:text-4xl">
-            Put a physics check between simulation and the next decision
-          </h2>
+    <section className="border-b border-white/10 py-20 sm:py-24">
+      <div className="container-tight flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="max-w-2xl">
+          <p className="landing-page-kicker">Start with one run</p>
+          <h2 className="mt-3 text-balance text-3xl font-medium sm:text-4xl">See what the checks find in your simulation data</h2>
           <p className="mt-4 max-w-xl text-base leading-7 text-white/65">
-            Try a run in the browser, then use the CLI or SDK when you are ready to make validation part of your pipeline.
+            Review the evidence first. Add a CLI or SDK gate once the checks fit your robot and task.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Link href="/play" className="btn-accent">Open playground <ArrowUpRight className="h-4 w-4" /></Link>
-          <Link href="/docs" className="btn-ghost">Read the docs</Link>
+          <Link href="/play" className="landing-button landing-button-primary">Open the playground <ArrowUpRight size={17} strokeWidth={1.7} /></Link>
+          <Link href="/docs" className="landing-button landing-button-secondary">Read the docs</Link>
         </div>
       </div>
     </section>

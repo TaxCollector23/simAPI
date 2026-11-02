@@ -12,8 +12,10 @@ export const metadata: Metadata = {
 // additionally saves run history; this one doesn't require an account.
 export default function PlayPage() {
   return (
-    <div className="container-tight pt-28 pb-24">
-      <ValidationDashboard />
+    <div className="dashboard-theme">
+      <div className="container-tight pt-28 pb-24">
+        <ValidationDashboard />
+      </div>
     </div>
   );
 }

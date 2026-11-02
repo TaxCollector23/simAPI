@@ -217,7 +217,7 @@ def _evaluate_anchor(data: pd.DataFrame, exponents: dict[str, Fraction],
         expected_value=const.value,
         observed_median=median,
         scale=abs(median) * SYSTEMATIC_DEVIATION_MAX_CV,
-        violated_rows={int(i): float(v / const.value) for i, v in zip(sub.index, vals)},
+        violated_rows={int(i): float(v / const.value) for i, v in zip(sub.index, vals, strict=True)},
         coverage=1.0,
         weight=0.4,  # lower confidence than a true anchor: could be a legitimate difference
         note=(f"~100% of rows are tightly self-consistent (CV={cv:.4f}) at "

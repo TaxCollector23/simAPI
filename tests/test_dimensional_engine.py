@@ -272,7 +272,7 @@ def test_units_cache_persists_llm_resolution(tmp_path, monkeypatch):
     this is what makes the LLM fallback function as a real (if informal)
     dictionary extension rather than a repeated re-guess."""
     monkeypatch.setenv("SIMAPI_UNITS_CACHE_PATH", str(tmp_path / "units_cache.json"))
-    from core.dimensional.units_cache import get_cached, store, stats
+    from core.dimensional.units_cache import get_cached, stats, store
 
     assert get_cached(["q_dyn"]) == {}
     store({"q_dyn": {"dimension_key": "pressure", "confidence": 0.85, "unit": None}})

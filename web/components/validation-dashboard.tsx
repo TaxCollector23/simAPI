@@ -11,6 +11,8 @@ import { cn } from "@/lib/utils";
 import { PreflightPanel } from "./preflight-panel";
 import { HistoryPanel } from "./history-panel";
 import { DimensionalResultPanel } from "./dimensional-result-panel";
+import { RoboticsRunReport } from "./robotics-run-report";
+import { RoboticsPlaygroundTools, toRoboticsLimits, type RobotLimitDraft } from "./robotics-playground-tools";
 import { recordRun } from "@/lib/run-history";
 import {
   validate, runDemo, validateDimensional, pollAI,
@@ -68,11 +70,14 @@ const SIM_TYPES: { value: string; label: string; conditions: { key: string; labe
       { key: "payload",   label: "Payload mass",  unit: "kg",  default: 5  },
       { key: "velocity",  label: "Max EE speed",  unit: "m/s", default: 1  },
     ],
-    example: [
-      { joint_torque: 48.2, joint_velocity: 1.52, power_consumption: 73.3, settling_time: 0.82, rise_time: 0.31, overshoot: 0.14, manipulability: 2.4, damping_ratio: 0.65 },
-      { joint_torque: 51.8, joint_velocity: 1.48, power_consumption: 76.7, settling_time: 0.79, rise_time: 0.29, overshoot: 0.18, manipulability: 2.6, damping_ratio: 0.68 },
-      { joint_torque: 49.5, joint_velocity: 1.55, power_consumption: 74.8, settling_time: 0.85, rise_time: 0.32, overshoot: 0.12, manipulability: 2.3, damping_ratio: 0.62 },
-    ],
+    example: ["reach", "place"].flatMap((episode_id, episode) => Array.from({ length: 6 }, (_, sample) => ({
+      episode_id, time: Number((sample * 0.1).toFixed(2)),
+      joint_1_position: Number((episode * 0.4 + sample * 0.05).toFixed(3)),
+      joint_1_velocity: 0.5, joint_1_acceleration: 0, joint_1_torque: 12 + sample * 0.3,
+      joint_2_position: Number((0.4 - sample * 0.025).toFixed(3)),
+      joint_2_velocity: -0.25, joint_2_acceleration: 0, joint_2_torque: 8 + sample * 0.2,
+      end_effector_force: 15 + sample * 0.5,
+    }))),
   },
   {
     value: "fluid_dynamics", label: "Fluid Dynamics / CFD",
@@ -304,6 +309,8 @@ export function ValidationDashboard() {
     Object.fromEntries(simConfig.conditions.map(c => [c.key, c.default]))
   );
   const [rawInput,  setRawInput]    = useState(JSON.stringify(simConfig.example, null, 2));
+  const [validatedRows, setValidatedRows] = useState<Record<string, unknown>[]>([]);
+  const [robotLimitDrafts, setRobotLimitDrafts] = useState<RobotLimitDraft[]>([]);
   const [phase,     setPhase]       = useState<"idle"|"running"|"done"|"error">("idle");
   const [engineMode, setEngineMode] = useState<"legacy"|"dimensional">("legacy");
   const [result,    setResult]      = useState<ValidationResult | null>(null);
@@ -369,6 +376,7 @@ export function ValidationDashboard() {
     const cfg = SIM_TYPES.find(s => s.value === value) ?? SIM_TYPES[0];
     setSelectedSim(cfg);
     setConditions(Object.fromEntries(cfg.conditions.map(c => [c.key, c.default])));
+    if (value === "robotics") setEngineMode("legacy");
     if (cfg.example.length > 0) setRawInput(JSON.stringify(cfg.example, null, 2));
     setPhase("idle"); setResult(null);
   }
@@ -393,14 +401,23 @@ export function ValidationDashboard() {
       }
 
       let res: ValidationResult;
+      const roboticsLimits = selectedSim.value === "robotics" ? toRoboticsLimits(robotLimitDrafts) : undefined;
       if (demo) {
-        res = await runDemo();
+        if (selectedSim.value === "robotics") {
+          const data = selectedSim.example as Record<string, unknown>[];
+          setRawInput(JSON.stringify(data, null, 2));
+          setValidatedRows(data);
+          res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true, ...(roboticsLimits && Object.keys(roboticsLimits).length ? { robotics_limits: roboticsLimits } : {}) }, DEMO_KEY);
+        } else {
+          res = await runDemo();
+        }
       } else {
         let data: Record<string, unknown>[];
         try { data = JSON.parse(rawInput); }
         catch { throw new Error("Invalid JSON. Check your input above."); }
         if (!Array.isArray(data)) throw new Error("Input must be a JSON array: [{...}, {...}, ...]");
-        res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true }, DEMO_KEY);
+        setValidatedRows(data);
+        res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true, ...(roboticsLimits && Object.keys(roboticsLimits).length ? { robotics_limits: roboticsLimits } : {}) }, DEMO_KEY);
       }
       setResult(res); setPhase("done");
       recordRun({
@@ -459,7 +476,7 @@ export function ValidationDashboard() {
             n_impossible: dres.n_impossible, n_inconsistent: dres.n_inconsistent,
           });
         } else {
-          const res = await validate({ data, simulation_type: selectedSim.value, conditions: sweepConditions, run_ai: false }, DEMO_KEY);
+          const res = await validate({ data, simulation_type: selectedSim.value, conditions: sweepConditions, run_ai: false, ...(selectedSim.value === "robotics" ? { robotics_limits: toRoboticsLimits(robotLimitDrafts) } : {}) }, DEMO_KEY);
           results.push({ value, status: res.status, trials_excluded: res.trials_excluded, n_impossible: 0, n_inconsistent: 0 });
         }
       }
@@ -496,8 +513,8 @@ export function ValidationDashboard() {
       {/* Top bar */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
         <div>
-          <h1 className="text-2xl font-medium text-white">Simulation validation</h1>
-          <p className="mt-2 text-sm text-white/60">Load a sample, set the domain and conditions, then inspect the findings</p>
+          <h1 className="text-2xl font-medium text-white">{selectedSim.value === "robotics" ? "Manipulation arm validation" : "Simulation validation"}</h1>
+          <p className="mt-2 text-sm text-white/60">{selectedSim.value === "robotics" ? "Inspect joint trajectories and check samples against limits from your robot model." : "Load a sample, set the domain and conditions, then inspect the findings."}</p>
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">
           <span className={serverUp === null ? "text-white/50" : serverUp ? "text-pass" : "text-fail"}>
@@ -542,9 +559,10 @@ export function ValidationDashboard() {
                 ["legacy", "Standard report"],
                 ["dimensional", "Detailed layers (raw)"],
               ] as const).map(([id, label]) => (
-                <button key={id} onClick={() => { setEngineMode(id); setPhase("idle"); setResult(null); setDimResult(null); }}
+                <button key={id} disabled={selectedSim.value === "robotics" && id === "dimensional"} onClick={() => { setEngineMode(id); setPhase("idle"); setResult(null); setDimResult(null); }}
                   className={cn("flex-1 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
-                    engineMode === id ? "bg-white/10 text-white" : "text-white/40 hover:text-white")}>
+                    engineMode === id ? "bg-white/10 text-white" : "text-white/40 hover:text-white",
+                    selectedSim.value === "robotics" && id === "dimensional" && "cursor-not-allowed opacity-40")}>
                   {label}
                 </button>
               ))}
@@ -673,11 +691,11 @@ export function ValidationDashboard() {
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm text-white/60">Data (JSON array)</label>
-              <span className="text-sm text-white/20">Cd, cd, drag_coefficient — all recognized</span>
+              <span className="text-sm text-white/20">{selectedSim.value === "robotics" ? "Joint signals · timestamp seconds · episode IDs" : "Column aliases are recognized"}</span>
             </div>
             <textarea
               value={rawInput}
-              onChange={e => setRawInput(e.target.value)}
+              onChange={e => { setRawInput(e.target.value); setResult(null); setPhase("idle"); }}
               rows={14}
               className="w-full bg-black/20 border border-white/[0.06] rounded-xl p-3 font-mono text-xs text-white/60 leading-relaxed resize-y outline-none focus:border-accent-blue/40 transition-colors"
               placeholder={`[\n  {"cd": 0.312, "cl": 0.847, "re": 415000},\n  ...\n]`}
@@ -686,6 +704,17 @@ export function ValidationDashboard() {
             <p className="mt-2 text-sm text-white/55">
               Each object is one simulation trial. Column names are auto-normalized.
             </p>
+            {selectedSim.value === "robotics" && (
+              <RoboticsPlaygroundTools
+                rawInput={rawInput}
+                limits={robotLimitDrafts}
+                onLimitsChange={(limits) => { setRobotLimitDrafts(limits); setResult(null); setPhase("idle"); }}
+                conditions={conditions}
+                onConditionsChange={(next) => { setConditions(next); setResult(null); setPhase("idle"); }}
+                excluded={(result?.exclusions ?? []).map((item) => item.trial_index)}
+                onCsvLoaded={(json) => { setRawInput(json); setResult(null); setPhase("idle"); }}
+              />
+            )}
           </div>
 
           {/* Run buttons */}
@@ -701,7 +730,7 @@ export function ValidationDashboard() {
               <RefreshCw className="h-4 w-4" />
               {engineMode === "dimensional"
                 ? `Run example dataset (${selectedSim.example.length || "N/A"} trials)`
-                : "Load demo dataset (200 trials, 5 corruption types)"}
+                : selectedSim.value === "robotics" ? `Run arm example (${selectedSim.example.length} samples)` : "Load demo dataset (200 trials, 5 corruption types)"}
             </button>
           </div>
 
@@ -807,16 +836,16 @@ export function ValidationDashboard() {
                       : "border-red-400/25 bg-red-400/5 text-red-400")}>
                     <div className="flex items-center gap-2 font-medium">
                       {result.training_ready
-                        ? <><CheckCircle className="h-3.5 w-3.5" /> Training ready — {result.trials_valid} validated trials available for ML pipeline</>
-                        : <><XCircle className="h-3.5 w-3.5" /> Not training ready — {result.trials_excluded} trials excluded, review issues below</>}
+                        ? <><CheckCircle className="h-3.5 w-3.5" /> No blocking checks — {result.trials_valid} non-excluded samples</>
+                        : <><XCircle className="h-3.5 w-3.5" /> Review required — {result.trials_excluded} samples excluded</>}
                     </div>
                     <p className="mt-2 leading-relaxed text-white/45">
-                      {result.trials_excluded > 0
-                        ? <>SimAPI excluded {result.trials_excluded} anomalous trial{result.trials_excluded !== 1 ? "s" : ""} (e.g. diverged runs like <code className="font-mono text-white/60">cd=999</code>, unit-error rows, sensor drift, duplicates). Training a surrogate model on these injects mislabeled targets and out-of-distribution inputs — they bias predictions and destabilize convergence. Excluding them means your model learns only from physically valid data, which is why {result.status !== "failed" ? "the remaining set is training-ready" : "the set needs cleanup first"}.</>
-                        : <>Every trial passed the physics checks, so the full dataset is safe to train on — no anomalies to exclude.</>}
+                      This verdict covers the checks evaluated for this run. Review warnings, missing checks, and your robot-specific limits before using the data downstream.
                     </p>
                   </div>
                 </div>
+
+                {selectedSim.value === "robotics" && <RoboticsRunReport result={result} rows={validatedRows} />}
 
                 {/* Concrete fixes -- plain language, specific to this dataset */}
                 {result.concrete_fixes && result.concrete_fixes.length > 0 && (
@@ -893,7 +922,7 @@ export function ValidationDashboard() {
                   </p>
                   {issues.length === 0 ? (
                     <div className="rounded-xl border border-pass/20 bg-pass/5 px-4 py-3 text-xs text-pass">
-                      ✓ Simulation data is physically valid — all checks passed
+                      No violations found in the checks that were evaluated.
                     </div>
                   ) : (
                     <>
@@ -987,7 +1016,7 @@ export function ValidationDashboard() {
                             <div className="h-full rounded-full transition-all duration-700"
                               style={{
                                 width: `${Math.round((result.ai.anomaly_score ?? 0) * 100)}%`,
-                                background: (result.ai.anomaly_score ?? 0) < 0.2 ? "#00e676" : (result.ai.anomaly_score ?? 0) < 0.5 ? "#fbbf24" : "#f87171",
+                                background: (result.ai.anomaly_score ?? 0) < 0.2 ? "#38664d" : (result.ai.anomaly_score ?? 0) < 0.5 ? "#865300" : "#a13c32",
                               }} />
                           </div>
                         </div>

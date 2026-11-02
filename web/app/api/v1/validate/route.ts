@@ -17,6 +17,7 @@ interface ValidateBody {
   data?: Record<string, unknown>[];
   simulation_type?: SimulationType;
   conditions?: Record<string, number>;
+  robotics_limits?: Record<string, [number, number]>;
   run_ai?: boolean;
   job_id?: string;
 }
@@ -137,8 +138,34 @@ export async function POST(req: Request) {
   if (rows.length === 0) {
     return NextResponse.json(errorBody("bad_request", "`data` must be a non-empty array of trial records.", requestId), { status: 400 });
   }
+  if (rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+    return NextResponse.json(errorBody("bad_request", "Each sample must be an object with named signals.", requestId), { status: 400 });
+  }
+  if (body.conditions !== undefined && (!body.conditions || typeof body.conditions !== "object" || Array.isArray(body.conditions) || Object.values(body.conditions).some((value) => typeof value !== "number" || !Number.isFinite(value)))) {
+    return NextResponse.json(errorBody("bad_request", "conditions must be a map of finite numeric values.", requestId), { status: 400 });
+  }
   if (rows.length > 10000) {
     return NextResponse.json(errorBody("payload_too_large", "Maximum 10,000 trials per request.", requestId), { status: 413 });
+  }
+  if (body.robotics_limits !== undefined) {
+    if (simType !== "robotics" || !body.robotics_limits || typeof body.robotics_limits !== "object" || Array.isArray(body.robotics_limits)) {
+      return NextResponse.json(errorBody("bad_request", "`robotics_limits` requires simulation_type `robotics` and a map of signal names to [min, max] pairs.", requestId), { status: 400 });
+    }
+    const invalid = Object.entries(body.robotics_limits).some(([signal, range]) =>
+      !signal.trim() || !Array.isArray(range) || range.length !== 2 ||
+      !range.every((value) => typeof value === "number" && Number.isFinite(value)) ||
+      !(range[0] < range[1]),
+    );
+    if (invalid) {
+      return NextResponse.json(errorBody("bad_request", "Each `robotics_limits` entry must be a finite [min, max] range with min < max.", requestId), { status: 400 });
+    }
+  }
+
+  for (const key of ["max_time_step", "velocity_tolerance", "acceleration_tolerance"]) {
+    const value = body.conditions?.[key];
+    if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
+      return NextResponse.json(errorBody("bad_request", `${key} must be a finite positive number.`, requestId), { status: 400 });
+    }
   }
 
   const PYTHON_API = process.env.PYTHON_API_URL;
@@ -150,7 +177,13 @@ export async function POST(req: Request) {
       const upstream = await fetch(`${PYTHON_API}/v1/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ data: rows, simulation_type: simType, conditions: body.conditions ?? {}, run_ai: true }),
+        body: JSON.stringify({
+          data: rows,
+          simulation_type: simType,
+          conditions: body.conditions ?? {},
+          robotics_limits: body.robotics_limits ?? {},
+          run_ai: body.run_ai ?? true,
+        }),
         signal: AbortSignal.timeout(35_000),
       });
       if (upstream.ok) {
@@ -183,15 +216,17 @@ export async function POST(req: Request) {
           statistics: pyResult.statistics ?? {},
           checks_by_category: pyResult.checks_by_category ?? {},
           columns_renamed: {},
+          robotics_checks: pyResult.robotics_checks,
+          robotics_summary: pyResult.robotics_summary,
         };
       } else {
-        result = richValidate(rows, simType, requestId.slice(0, 8));
+        result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
       }
     } catch {
-      result = richValidate(rows, simType, requestId.slice(0, 8));
+      result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
     }
   } else {
-    result = richValidate(rows, simType, requestId.slice(0, 8));
+    result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
   }
 
   const excludedIdx = new Set(result.exclusions.map((e: { trial_index: number }) => e.trial_index));
@@ -237,7 +272,7 @@ export async function POST(req: Request) {
   return NextResponse.json(
     {
       ...result,
-      engine: engineSource === "python" ? "python-dimensional" : "typescript-20-checks",
+      engine: engineSource === "python" ? "python-dimensional" : simType === "robotics" ? "typescript-manipulation-2" : "typescript-20-checks",
       python_backend: engineSource === "python",
       ai: mapAi(review),
       ai_status: review.enabled ? (review.error ? "error" : "completed") : "disabled",

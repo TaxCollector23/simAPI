@@ -33,7 +33,7 @@ const r2 = await client.validateFile("simulation.json", { simulationType: "struc
 Configuration falls back to environment variables:
 
 - `SIMAPI_API_KEY` — your key
-- `SIMAPI_BASE_URL` — API base URL (default `https://api.simapi.dev`)
+- `SIMAPI_BASE_URL` — API base URL (default `https://simapilander.vercel.app/api`)
 
 Errors throw `SimAPIError` with `code`, `status`, and `requestId`.
 
@@ -45,6 +45,7 @@ simapi init                  # write a sample simulation.json
 simapi validate simulation.json
 simapi validate run.json --type structural --json
 simapi validate run.csv --fail-on warning   # non-zero exit for CI
+simapi validate arm.csv --profile arm-profile.json --no-ai --report report.json --fail-on failed
 simapi whoami
 simapi logout
 simapi version
@@ -52,6 +53,28 @@ simapi help
 ```
 
 `SIMAPI_API_KEY` overrides the saved key, which is convenient in CI.
+
+For robotics trajectories, the CLI reads CSV headers and numeric samples
+directly. CSV input defaults to the robotics domain. A profile is a JSON file
+with the arm's model or controller limits:
+
+```json
+{
+  "robotics_limits": {
+    "joint_1_position": [-1.57, 1.57],
+    "joint_1_velocity": [-2.0, 2.0],
+    "joint_1_torque": [-70.0, 70.0],
+    "joint_1_acceleration": [-5.0, 5.0]
+  },
+  "conditions": {
+    "max_time_step": 0.02,
+    "velocity_tolerance": 0.1
+  }
+}
+```
+
+Keep units consistent with the trajectory data. SimAPI does not infer safe
+limits from observed samples.
 
 ## Build (for contributors)
 

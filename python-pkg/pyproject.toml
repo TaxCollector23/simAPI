@@ -14,7 +14,7 @@ keywords = ["simulation", "validation", "cfd", "fea", "physics"]
 dependencies = []
 
 [project.urls]
-Homepage = "https://sim-api.vercel.app"
+Homepage = "https://simapilander.vercel.app"
 Source = "https://github.com/TaxCollector23/SimAPI-YC-"
 
 [project.scripts]

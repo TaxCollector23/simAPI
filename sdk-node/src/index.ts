@@ -23,6 +23,7 @@ export type SimulationType =
 export interface ValidateOptions {
   simulationType?: SimulationType;
   conditions?: Record<string, number>;
+  roboticsLimits?: Record<string, [number, number]>;
   jobId?: string;
   runAi?: boolean;
 }
@@ -80,7 +81,7 @@ export class SimAPI {
     const cfg: SimAPIConfig =
       typeof apiKeyOrConfig === "string" ? { apiKey: apiKeyOrConfig } : apiKeyOrConfig ?? {};
     this.apiKey = cfg.apiKey ?? process.env.SIMAPI_API_KEY;
-    this.baseUrl = (cfg.baseUrl ?? process.env.SIMAPI_BASE_URL ?? "https://sim-api.vercel.app/api").replace(/\/$/, "");
+    this.baseUrl = (cfg.baseUrl ?? process.env.SIMAPI_BASE_URL ?? "https://simapilander.vercel.app/api").replace(/\/$/, "");
     this.timeoutMs = cfg.timeoutMs ?? 60_000;
   }
 
@@ -93,6 +94,7 @@ export class SimAPI {
       data,
       simulation_type: options.simulationType ?? "aerodynamics",
       conditions: options.conditions ?? {},
+      ...(options.roboticsLimits ? { robotics_limits: options.roboticsLimits } : {}),
       ...(options.jobId ? { job_id: options.jobId } : {}),
       run_ai: options.runAi ?? true,
     });

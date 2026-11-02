@@ -1,6 +1,6 @@
 #!/bin/sh
 # SimAPI CLI installer (macOS / Linux)
-#   curl -fsSL https://sim-api.vercel.app/install.sh | sh
+#   curl -fsSL https://simapilander.vercel.app/install.sh | sh
 set -e
 
 REPO="https://raw.githubusercontent.com/TaxCollector23/SimAPI-YC-/main"

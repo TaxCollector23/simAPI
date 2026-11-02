@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import sys
@@ -31,7 +32,7 @@ from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -56,6 +57,7 @@ from core.ingestion import DataIngester
 from core.mesh_validator import MeshValidator, humanize_mesh_check_name, predict_corruption_risks
 from core.physics_validator import PhysicsValidator, SimulationType
 from core.repair import analyze as repair_analyze
+from core.robotics_validation import check_robotics_limits
 
 API_VERSION = "3.1.0"
 
@@ -112,6 +114,26 @@ class ValidateRequest(BaseModel):
         default=SimulationType.AERODYNAMICS, description="Physics domain to validate against."
     )
     conditions: dict[str, float] = Field(default_factory=dict, description="Input boundary conditions.")
+    robotics_limits: dict[str, tuple[float, float]] = Field(
+        default_factory=dict,
+        description="Optional per-signal robot limits, e.g. {'joint_1_position': [-1.57, 1.57]}.",
+    )
+    @field_validator("conditions")
+    @classmethod
+    def validate_trajectory_options(cls, value):
+        for key in ("max_time_step", "velocity_tolerance", "acceleration_tolerance"):
+            if key in value and (not math.isfinite(value[key]) or value[key] <= 0):
+                raise ValueError(f"{key} must be a finite positive number")
+        return value
+
+    @field_validator("robotics_limits")
+    @classmethod
+    def validate_robot_limits(cls, value):
+        for signal, (low, high) in value.items():
+            if not signal.strip() or not math.isfinite(low) or not math.isfinite(high) or low >= high:
+                raise ValueError("Robot limits require non-empty signal names and finite minimum < maximum")
+        return value
+
     job_id: str | None = Field(default=None, description="Optional caller-supplied tracking id.")
     run_ai: bool = Field(default=True, description="Run the async AI reasoning layer.")
     deep_ai: bool = Field(
@@ -861,6 +883,10 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     _dim_ms = round((time.perf_counter() - _t0) * 1000, 1)
     result = _serialize_dimensional(dim_report, df, jid, _dim_ms)
 
+    if req.simulation_type == SimulationType.ROBOTICS:
+        robotics = check_robotics_limits(df, req.robotics_limits, source_rows=req.data, conditions=req.conditions)
+        result = _merge_robotics_limits(result, robotics)
+
     # Legacy check-based engine kept available, non-authoritative: its
     # findings are exposed under `legacy_physics` for comparison/migration
     # only. It no longer drives status, exclusions, or training_ready.
@@ -982,6 +1008,68 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
             daemon=True,
         ).start()
 
+    return result
+
+
+def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> dict[str, Any]:
+    """Promote manipulation-arm limits into the verdict returned by every client."""
+    checks = robotics["checks"]
+    result["robotics_checks"] = checks
+    result["robotics_summary"] = robotics["summary"]
+    passed = sum(check["status"] == "passed" for check in checks)
+    failed = sum(check["status"] == "failed" for check in checks)
+    warnings = sum(check["status"] == "warning" for check in checks)
+    result["all_checks"] += len(checks)
+    result["unique_checks"] = result.get("unique_checks", result["all_checks"] - len(checks)) + len(checks)
+    result["passed"] += passed
+    result["failed"] += failed
+    result["warnings"] += warnings
+    bucket = result.setdefault("checks_by_category", {}).setdefault(
+        "robotics_limits", {"passed": 0, "warning": 0, "failed": 0}
+    )
+    bucket["passed"] += passed
+    bucket["failed"] += failed
+    bucket["warning"] += warnings
+
+    exclusions = result.setdefault("exclusions", [])
+    seen = {item["trial_index"] for item in exclusions}
+    for row, reasons in robotics["excluded"].items():
+        if row in seen:
+            continue
+        exclusions.append({
+            "trial_number": row + 1,
+            "trial_index": row,
+            "reason": "; ".join(reasons),
+            "severity": "critical",
+        })
+        seen.add(row)
+    result["trials_excluded"] = len(seen)
+    result["trials_valid"] = max(0, result["trials_submitted"] - len(seen))
+    result["exclusion_rate"] = round(len(seen) / result["trials_submitted"], 4) if result["trials_submitted"] else 0.0
+
+    for check in checks:
+        if check["status"] == "passed":
+            continue
+        result["issues"].append({
+            "name": check["name"],
+            "human_name": check.get("human_name", f"Robot data check failed: {check['column']}"),
+            "status": check["status"],
+            "description": check.get("description", f"{check['column']} must remain within its configured range"),
+            "detail": check["detail"],
+            "value": None,
+            "category": "robotics_limits",
+        })
+
+    if failed:
+        result["status"] = "failed"
+        result["confidence"] = "low"
+        result["training_ready"] = False
+        result["plain_summary"] = "Robot limit or trajectory checks failed. Review the affected samples before using this run."
+    if warnings:
+        result["training_ready"] = False
+        if result["status"] == "passed":
+            result["status"] = "warning"
+            result["confidence"] = "medium"
     return result
 
 

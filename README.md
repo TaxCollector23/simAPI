@@ -1,114 +1,218 @@
-<div align="center">
-
 # SimAPI: Simulations you can trust
 
-Simulation CI/CD for Physical AI and robotics. Check simulation data against
-physical laws, catch bad runs, and gate what reaches training or autonomy.
-Use SimAPI from the web dashboard, CLI, or SDK.
+Hosted validation for simulation data used in Physical AI and robotics. Check a
+run in the browser, from the CLI, or through an SDK. SimAPI is a service to use,
+not software you need to host.
 
-[![CI](https://github.com/TaxCollector23/simAPI/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
+[Open the playground](https://simapilander.vercel.app/play) · [Read the docs](https://simapilander.vercel.app/docs) · [View the source](https://github.com/TaxCollector23/simAPI)
 
-[Open the SimAPI dashboard](https://simapilander.vercel.app/dashboard) · [Read the docs](https://simapilander.vercel.app/docs) · [Use the CLI](https://simapilander.vercel.app/docs/sdks/cli)
+## What SimAPI does
 
-</div>
+SimAPI checks simulation records for values and relationships that are outside
+their expected physical ranges. It returns a machine-readable status, the checks
+that ran, affected samples, and findings that can be reviewed or used to stop a
+pipeline. The goal is to catch bad simulation data before it is used for model
+training, evaluation, planning, or control.
 
----
+SimAPI is focused on two workflows:
 
-## Why SimAPI
+- **Physical AI:** review synthetic and simulated data before it enters a
+  training or evaluation dataset. Use the report to inspect exclusions and
+  decide whether a run is suitable for the next step.
+- **Robotics, starting with manipulation arms:** check joint signals, actuator
+  outputs, and end-effector measurements. Supply per-signal limits from the
+  robot model or controller configuration so SimAPI can flag samples that leave
+  the arm's allowed range.
 
-Physical AI and robotics depend on simulated worlds: synthetic sensor data,
-scenarios, trajectories, and solver outputs. A plausible looking run can still
-break physical constraints, contain unit mistakes, or carry bad values into a
-training set or autonomy stack.
+SimAPI checks data; it does not certify a robot, prove sim-to-real transfer, or
+replace engineering review. A clean report means only that the checks in that
+run did not find a reported violation.
 
-SimAPI is a hosted validation service for that gap. Send it simulation data and
-get a structured verdict you can inspect in the dashboard or use as a CI gate.
-The deterministic checks cover physical plausibility, conservation, dimensions,
-relationships between variables, statistical consistency, and outliers. An
-optional AI review adds a second pass over the result.
+## Manipulation-arm validation
 
-### Built for two workflows
+For robotics runs, SimAPI applies broad plausibility checks to recognized signals
+such as joint position, velocity, acceleration and torque; end-effector force,
+torque and velocity; position error; manipulability; condition number; and
+control response metrics. These broad ranges are screening checks. They are not
+the limits for a specific robot.
 
-- **Physical AI:** validate synthetic and simulated data before using it to train
-  or evaluate models. Check the `training_ready` result and inspect warnings.
-- **Robotics:** validate simulated sensor, motion, and environment outputs before
-  they enter autonomy and planning pipelines. Fail a run when its verdict does
-  not meet your configured threshold.
+Pass model-specific ranges with `robotics_limits`. A violation fails the run and
+identifies the affected samples. If a configured signal is missing, validation
+fails closed because the requested limit could not be checked.
 
-## Use SimAPI
+```json
+{
+  "simulation_type": "robotics",
+  "robotics_limits": {
+    "joint_1_position": [-1.57, 1.57],
+    "joint_1_velocity": [-2.0, 2.0],
+    "joint_1_torque": [-70.0, 70.0]
+  },
+  "data": [
+    { "joint_1_position": 0.2, "joint_1_velocity": 0.4, "joint_1_torque": 12.0 },
+    { "joint_1_position": 0.3, "joint_1_velocity": 0.5, "joint_1_torque": 14.0 }
+  ]
+}
+```
 
-SimAPI runs as a hosted service. You do not need to deploy or maintain the API.
-Choose the interface that fits your workflow:
+The ranges must use the same units as the input data. SimAPI does not yet parse
+URDF, ROS bag, or MCAP files; provide numeric records and limits directly.
 
-| Interface | Use it for |
-| --- | --- |
-| [Web dashboard](https://simapilander.vercel.app/dashboard) | Get an API key, try validation, and review results. |
-| [CLI](https://simapilander.vercel.app/docs/sdks/cli) | Validate files locally or add a pass/fail check to CI. |
-| [SDK and REST API](https://simapilander.vercel.app/docs) | Call validation from Python, Node.js, or your own application. |
+## Trajectory checks
 
-### Validate from CI with the CLI
+The manipulation engine also checks motion between samples within each episode:
 
-Install the CLI, authenticate once, then add a validation step to your workflow:
+- **Velocity implied by position:** compare `Δposition / Δtime` with a configured
+  limit for the corresponding joint velocity.
+- **Acceleration implied by velocity:** compare `Δvelocity / Δtime` with a
+  configured joint acceleration range.
+- **Sampling gaps:** set `conditions.max_time_step` in seconds to catch intervals
+  longer than the sampling budget.
+- **State agreement:** opt into `conditions.velocity_tolerance` or
+  `conditions.acceleration_tolerance` to compare finite differences with the
+  average recorded velocity or acceleration at the interval endpoints.
+- **Coverage:** missing time, matching signals, or valid intervals are reported
+  as checks that could not be evaluated, rather than a silent pass.
+
+Timestamps must be numeric seconds. Positions must be unwrapped and use the
+same units as the limits; tolerances are absolute values in the corresponding
+velocity or acceleration units. Finite differences estimate interval-average
+motion, not peak velocity or acceleration. No joint-wrap convention is inferred.
+
+Reports include `robotics_checks` and `robotics_summary`: the motion engine
+version, episode IDs, sample counts, duration when available, flagged samples,
+and assumptions. The playground can export a JSON report or complete unflagged
+episodes as CSV. It keeps episode samples together to avoid introducing gaps
+by removing individual rows.
+
+A reusable CLI or playground profile can contain limits and check settings:
+
+```json
+{
+  "robotics_limits": {
+    "joint_1_velocity": [-2, 2],
+    "joint_1_acceleration": [-5, 5]
+  },
+  "conditions": {
+    "max_time_step": 0.02,
+    "velocity_tolerance": 0.1,
+    "acceleration_tolerance": 0.5
+  }
+}
+```
+
+These are example values. Use the limits, sampling requirements, and units for
+your arm. `simapi validate episode.csv --profile arm-profile.json --no-ai
+--report report.json --fail-on failed` writes a report and returns a failure
+exit code if a blocking check fails, including when `--json` output is used.
+
+## Use the hosted service
+
+The same hosted endpoint can be called from a browser, a CI job, or an
+application. No local server or deployment is required.
+
+### Browser
+
+Open the [playground](https://simapilander.vercel.app/play) to upload a run and
+inspect its validation report.
+
+### CLI
+
+Install the CLI and validate a robotics dataset:
 
 ```bash
 npm install -g simapi-cli
-simapi login
-simapi validate simulation.json --type robotics --fail-on warning
+simapi validate episode.json --type robotics --fail-on warning
 ```
 
-In CI, provide `SIMAPI_API_KEY` as a secret instead of using interactive login.
-`SIMAPI_BASE_URL` defaults to the hosted SimAPI API. See the [CLI guide](https://simapilander.vercel.app/docs/sdks/cli)
-for install options and command details.
-
-### Call the API from an application
+The CLI reads CSV trajectories directly. CSV input defaults to robotics; add a
+JSON profile to reuse limits for your arm:
 
 ```bash
-curl -X POST https://sim-api.vercel.app/api/v1/validate \
-  -H "X-API-Key: $SIMAPI_API_KEY" \
+simapi validate episode.csv --profile arm-profile.json --fail-on warning
+```
+
+```json
+{
+  "robotics_limits": {
+    "joint_1_position": [-1.57, 1.57],
+    "joint_1_velocity": [-2.0, 2.0],
+    "joint_1_torque": [-70.0, 70.0]
+  }
+}
+```
+
+The CSV needs a header row. Numeric cells are sent as numbers; text fields such
+as `episode_id` are preserved. Use the same units as the robot model or
+controller values in the profile. The CLI uses the hosted SimAPI endpoint by
+default. Set `SIMAPI_BASE_URL` only when you have been given another endpoint.
+
+### Python SDK
+
+```bash
+pip install simapi
+```
+
+```python
+from simapi import SimAPI
+
+client = SimAPI()
+result = client.validate(
+    "episode.json",
+    simulation_type="robotics",
+    robotics_limits={
+        "joint_1_position": (-1.57, 1.57),
+        "joint_1_velocity": (-2.0, 2.0),
+        "joint_1_torque": (-70.0, 70.0),
+    },
+)
+
+print(result["status"], result["training_ready"])
+for issue in result["issues"]:
+    print(issue["human_name"], issue["detail"])
+```
+
+### REST API and Node.js SDK
+
+```bash
+curl -X POST https://simapilander.vercel.app/api/v1/validate \
   -H "Content-Type: application/json" \
   -d '{
     "simulation_type": "robotics",
+    "robotics_limits": {"joint_1_position": [-1.57, 1.57]},
     "data": [
-      { "condition_number": 12.4, "workspace_volume": 0.84, "end_effector_velocity": 0.42 },
-      { "condition_number": 13.1, "workspace_volume": 0.82, "end_effector_velocity": 0.39 }
+      {"joint_1_position": 0.2},
+      {"joint_1_position": 0.3}
     ]
   }'
 ```
 
-The response includes a `passed`, `warning`, or `failed` status, the checks and
-issues behind it, and whether the data is marked `training_ready`. See the
-[API quickstart](https://simapilander.vercel.app/docs/quickstart) for Python and
-Node.js examples.
+The response includes `status`, `training_ready`, `issues`, `exclusions`, and
+per-signal statistics. The Node.js SDK accepts the same limits as
+`roboticsLimits` in its validation options. See the [API quickstart](https://simapilander.vercel.app/docs/quickstart)
+and [CLI guide](https://simapilander.vercel.app/docs/sdks/cli).
 
-## What gets checked
+## Current scope
 
-- Physical plausibility and domain-specific bounds
-- Conservation laws and dimensional consistency
-- Cross-variable and statistical relationships
-- Outliers and anomalous distributions
-- Optional AI review for a second opinion
+The hosted validator accepts tabular numeric records. Robotics limit checks are
+available for recognized scalar signals and caller-provided per-signal ranges;
+timestamps are checked for increasing order within each episode. URDF-derived
+limits, ROS 2 bag and MCAP ingestion, contact and collision validation, peak
+motion reconstruction, and simulator-specific adapters are not implemented yet. Those are the next steps for supporting more
+manipulation-arm workflows.
 
-Validation returns a structured result that you can inspect or use to continue,
-warn, or fail a pipeline. Treat the verdict as a quality signal for simulation
-data; it does not certify a physical system or replace engineering review.
+## Contributing
 
-## For contributors
-
-The hosted service is the normal way to use SimAPI. To work on the service itself,
-clone the repository and run the local development environment:
+The hosted service is the normal way to use SimAPI. This repository contains the
+service and validation engine for contributors working on it:
 
 ```bash
 git clone https://github.com/TaxCollector23/simAPI.git
 cd simAPI
 make dev
-make test
-python launch.py  # local API at http://localhost:8000
 ```
 
-The repository includes the API, validation engine, SDKs, CLI, dashboard, docs,
-and tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for repository development guidance.
 
 ## License
 

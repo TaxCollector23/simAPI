@@ -39,8 +39,9 @@ export function DashboardApp() {
   }
 
   return (
-    <div className="container-tight pb-24 pt-32">
-      <div className="grid gap-8 lg:grid-cols-[240px_1fr]">
+    <div className="dashboard-theme">
+      <div className="container-tight pb-24 pt-32">
+        <div className="grid gap-8 lg:grid-cols-[240px_1fr]">
         {/* Sidebar */}
         <aside className="lg:sticky lg:top-24 lg:self-start">
           <p className="px-3 text-sm font-medium text-white/55">Workspace</p>
@@ -77,6 +78,7 @@ export function DashboardApp() {
           {section === "usage" && <Usage />}
           {section === "run" && <RunSimulation />}
           {section === "settings" && <SettingsPanel />}
+        </div>
         </div>
       </div>
     </div>

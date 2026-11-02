@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import requests
 
-API_BASE = os.environ.get("SIMAPI_BASE_URL", "https://sim-api.vercel.app/api")
+API_BASE = os.environ.get("SIMAPI_BASE_URL", "https://simapilander.vercel.app/api")
 API_KEY = os.environ.get("SIMAPI_API_KEY")
 
 
@@ -198,6 +198,7 @@ def validate(
     conditions:      dict = None,
     job_id:          str | None = None,
     api_key:         str | None = None,
+    robotics_limits: dict[str, tuple[float, float]] | None = None,
 ) -> ValidationResult:
     """
     Validate simulation data against physical laws.
@@ -209,6 +210,7 @@ def validate(
         conditions:      Input conditions e.g. {"velocity": 15.0, "altitude": 120.0}
         job_id:          Optional tracking ID
         api_key:         SimAPI API key (not required for local server)
+        robotics_limits: Optional per-signal limits, e.g. {"joint_1_position": (-1.57, 1.57)}
 
     Returns:
         ValidationResult with physics checks, statistics, and ML-ready flag
@@ -232,6 +234,8 @@ def validate(
         "simulation_type": simulation_type,
         "conditions":      conditions,
     }
+    if robotics_limits:
+        payload["robotics_limits"] = robotics_limits
     if job_id:
         payload["job_id"] = job_id
 
@@ -301,6 +305,7 @@ class SimAPI:
         simulation_type: str = "aerodynamics",
         conditions: dict | None = None,
         job_id: str | None = None,
+        robotics_limits: dict[str, tuple[float, float]] | None = None,
     ) -> ValidationResult:
         """Validate simulation data. Accepts a file path, list, DataFrame, or array."""
         records = _load_data(data)
@@ -309,6 +314,8 @@ class SimAPI:
             "simulation_type": simulation_type,
             "conditions": conditions or {},
         }
+        if robotics_limits:
+            payload["robotics_limits"] = robotics_limits
         if job_id:
             payload["job_id"] = job_id
         response = requests.post(

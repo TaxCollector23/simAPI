@@ -12,11 +12,11 @@ browser-based login flow.
 <CodeGroup>
 
 ```bash curl (macOS/Linux)
-curl -fsSL https://sim-api.vercel.app/install.sh | sh
+curl -fsSL https://simapilander.vercel.app/install.sh | sh
 ```
 
 ```powershell PowerShell (Windows)
-irm https://sim-api.vercel.app/install.ps1 | iex
+irm https://simapilander.vercel.app/install.ps1 | iex
 ```
 
 ```bash Homebrew
@@ -35,7 +35,7 @@ npm install -g simapi-cli
 simapi login
 ```
 
-Opens `https://sim-api.vercel.app/auth?cli=true`, you sign in with Google or email,
+Opens `https://simapilander.vercel.app/auth?cli=true`, you sign in with Google or email,
 copy your API key, and paste it back in the terminal. The key is verified and saved
 to `~/.simapi/config.json`. `SIMAPI_API_KEY` overrides it in CI.
 
@@ -94,4 +94,4 @@ simapi <command> --help
 ## Environment
 
 <ParamField path="SIMAPI_API_KEY" type="string">Overrides the saved key.</ParamField>
-<ParamField path="SIMAPI_BASE_URL" type="string" default="https://sim-api.vercel.app/api">API base URL.</ParamField>
+<ParamField path="SIMAPI_BASE_URL" type="string" default="https://simapilander.vercel.app/api">API base URL.</ParamField>

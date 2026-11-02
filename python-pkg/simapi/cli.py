@@ -1118,7 +1118,7 @@ def _build_sarif_report(result, file: str, domain: str) -> str:
                 "driver": {
                     "name": "SimAPI",
                     "version": VERSION,
-                    "informationUri": "https://sim-api.vercel.app",
+                    "informationUri": "https://simapilander.vercel.app",
                     "rules": [
                         {"id": "simapi/solver_divergence", "name": "SolverDivergence",
                          "shortDescription": {"text": "Solver divergence detected"}},
@@ -1578,7 +1578,7 @@ def cmd_init(args):
     if path.exists() and "--force" not in (args.get("_") or []):
         _fail("simapi.json already exists. Use --force to overwrite.")
     cfg = {
-        "$schema": "https://sim-api.vercel.app/schema/simapi.json",
+        "$schema": "https://simapilander.vercel.app/schema/simapi.json",
         "simulation_type": args.get("domain") or "aerodynamics",
         "conditions": {},
         "fail_on": "critical",

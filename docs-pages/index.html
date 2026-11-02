@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SimAPI Documentation</title>
 <meta name="description" content="SimAPI — validate simulation results before they reach production. Guides, API reference, SDKs, and the CLI." />
-<link rel="icon" href="https://sim-api.vercel.app/hero.svg" />
+<link rel="icon" href="https://simapilander.vercel.app/hero.svg" />
 <style>
   :root{
     --bg:#090a0f; --panel:#0f1118; --panel2:#12141d; --line:rgba(255,255,255,.08);
@@ -67,10 +67,10 @@
 </style>
 </head>
 <body>
-<div class="top"><img src="https://sim-api.vercel.app/hero.svg" alt="SimAPI"/><b>SimAPI Docs</b></div>
+<div class="top"><img src="https://simapilander.vercel.app/hero.svg" alt="SimAPI"/><b>SimAPI Docs</b></div>
 <div class="layout">
   <aside>
-    <a class="brand" href="#top"><img src="https://sim-api.vercel.app/hero.svg" alt="SimAPI"/><b>SimAPI</b></a>
+    <a class="brand" href="#top"><img src="https://simapilander.vercel.app/hero.svg" alt="SimAPI"/><b>SimAPI</b></a>
     <nav>
       <div class="grp">Get started</div>
       <a href="#overview">Overview</a>
@@ -89,7 +89,7 @@
       <a href="#cli">CLI</a>
       <div class="grp">More</div>
       <a href="#cicd">CI/CD</a>
-      <a href="https://sim-api.vercel.app">Dashboard ↗</a>
+      <a href="https://simapilander.vercel.app">Dashboard ↗</a>
       <a href="https://github.com/TaxCollector23/SimAPI-YC-">GitHub ↗</a>
     </nav>
   </aside>
@@ -113,10 +113,10 @@
     <h2 id="install">Install the CLI</h2>
     <p>Pick whichever fits your stack — the command installed is always <code>simapi</code>.</p>
     <pre><code># macOS / Linux
-curl -fsSL https://sim-api.vercel.app/install.sh | sh
+curl -fsSL https://simapilander.vercel.app/install.sh | sh
 
 # Windows (PowerShell)
-irm https://sim-api.vercel.app/install.ps1 | iex
+irm https://simapilander.vercel.app/install.ps1 | iex
 
 # Homebrew
 brew install TaxCollector23/tap/simapi
@@ -126,7 +126,7 @@ npm install -g simapi-cli</code></pre>
 
     <h2 id="quickstart">Quickstart</h2>
     <p>Validate a batch of simulation trials against the aerodynamics ruleset:</p>
-    <pre><code>curl -X POST https://sim-api.vercel.app/api/v1/validate \
+    <pre><code>curl -X POST https://simapilander.vercel.app/api/v1/validate \
   -H "Content-Type: application/json" \
   -d '{
     "simulation_type": "aerodynamics",
@@ -140,16 +140,16 @@ npm install -g simapi-cli</code></pre>
     the surfaced <code>issues</code>, per-trial <code>exclusions</code>, per-column <code>statistics</code>, and a
     <code>training_ready</code> verdict.</p>
     <div class="note">No key required for the public demo endpoint. For higher limits, generate an API key on the
-    <a href="https://sim-api.vercel.app/dashboard">dashboard</a> and send it as <code>X-API-Key</code>.</div>
+    <a href="https://simapilander.vercel.app/dashboard">dashboard</a> and send it as <code>X-API-Key</code>.</div>
 
     <h2 id="auth">Authentication</h2>
     <p>Send your key in the <code>X-API-Key</code> header (preferred) or as a bearer token. The SDKs and CLI read
     <code>SIMAPI_API_KEY</code> from the environment automatically.</p>
-    <pre><code>curl https://sim-api.vercel.app/api/v1/validate \
+    <pre><code>curl https://simapilander.vercel.app/api/v1/validate \
   -H "X-API-Key: sk_live_..."</code></pre>
 
     <h2 id="base">Base URL</h2>
-    <pre><code>https://sim-api.vercel.app/api</code></pre>
+    <pre><code>https://simapilander.vercel.app/api</code></pre>
     <p>All endpoints are versioned under <code>/v1</code>. The response schema within a version is additive-only.</p>
 
     <h2 id="validate">POST /v1/validate</h2>
@@ -180,7 +180,7 @@ npm install -g simapi-cli</code></pre>
     <h2 id="setup">POST /v1/validate/setup</h2>
     <p>Pre-flight validation: judge a mesh + solver + physics configuration <em>before</em> it runs and predict
     which output checks are likely to fail.</p>
-    <pre><code>curl -X POST https://sim-api.vercel.app/api/v1/validate/setup \
+    <pre><code>curl -X POST https://simapilander.vercel.app/api/v1/validate/setup \
   -H "Content-Type: application/json" \
   -d '{ "config": {
     "solver": "openfoam",
@@ -193,7 +193,7 @@ npm install -g simapi-cli</code></pre>
     <em>why</em> and a <em>fix</em>), and actionable <code>recommendations</code>.</p>
 
     <h2 id="health">GET /v1/health</h2>
-    <pre><code>curl https://sim-api.vercel.app/api/v1/health</code></pre>
+    <pre><code>curl https://simapilander.vercel.app/api/v1/health</code></pre>
 
     <h2 id="errors">Errors</h2>
     <p>Errors use a consistent envelope with a stable <code>code</code> and a <code>request_id</code>:</p>
@@ -245,7 +245,7 @@ simapi api-key show|rotate|delete</code></pre>
 
     <footer>
       SimAPI — the CI/CD layer for engineering simulations ·
-      <a href="https://sim-api.vercel.app">sim-api.vercel.app</a> ·
+      <a href="https://simapilander.vercel.app">simapilander.vercel.app</a> ·
       <a href="https://github.com/TaxCollector23/SimAPI-YC-">GitHub</a>
     </footer>
   </main>

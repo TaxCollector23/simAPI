@@ -3,6 +3,7 @@
  * response shape the validation dashboard (ported from the desktop app) expects:
  * issues, exclusions, per-column statistics, checks-by-category, and renames.
  */
+import { analyzeTrajectories, type RoboticsSummary, type TrajectoryCheck } from "./robotics-trajectory";
 import { validate, canonical, type SimulationType, type CheckResult } from "./validation-engine";
 
 export interface RichIssue {
@@ -41,6 +42,8 @@ export interface RichResult {
   statistics: Record<string, RichStat>;
   checks_by_category: Record<string, { passed: number; warning: number; failed: number }>;
   columns_renamed: Record<string, string>;
+  robotics_summary?: RoboticsSummary;
+  robotics_checks?: TrajectoryCheck[];
 }
 
 function humanize(check: CheckResult): string {
@@ -67,7 +70,13 @@ function stats(values: number[]): RichStat {
   };
 }
 
-export function richValidate(rows: Record<string, unknown>[], simType: SimulationType, jobId: string): RichResult {
+export function richValidate(
+  rows: Record<string, unknown>[],
+  simType: SimulationType,
+  jobId: string,
+  roboticsLimits: Record<string, [number, number]> = {},
+  conditions: Record<string, number> = {},
+): RichResult {
   const t0 = performance.now();
   let passed = 0, warnings = 0, failed = 0, allChecks = 0, excluded = 0;
   const issueMap = new Map<string, RichIssue>();
@@ -86,7 +95,7 @@ export function richValidate(rows: Record<string, unknown>[], simType: Simulatio
       if (Number.isFinite(num)) (columnValues[canon] ??= []).push(num);
     }
 
-    const r = validate(trial, simType);
+    const r = validate(trial, simType, roboticsLimits);
     allChecks += r.checksRun;
     passed += r.passed;
     warnings += r.warnings;
@@ -136,6 +145,7 @@ export function richValidate(rows: Record<string, unknown>[], simType: Simulatio
     }
   });
 
+  if (simType !== "robotics") {
   // 1. Monotonic drift (Pearson of value vs trial order — catches sub-R=0.7 creep).
   for (const [col, s] of Object.entries(series)) {
     if (s.length < 20) continue;
@@ -175,7 +185,31 @@ export function richValidate(rows: Record<string, unknown>[], simType: Simulatio
   // 4. Near-duplicate blocks (standardized cosine similarity, sliding window).
   nearDuplicates(rowNum, rows.length, exclude, addCheck);
 
-  // 5. Relationship drift: sensor drift buried in a wide marginal distribution but
+  }
+
+  const robotics = simType === "robotics" ? analyzeTrajectories(rows, roboticsLimits, conditions) : undefined;
+  if (robotics) {
+    for (const check of robotics.checks) {
+      if (check.status === "passed") {
+        passed++; allChecks++; uniqueCheckNames.add(check.name);
+        (byCat.robotics_trajectory ??= { passed: 0, warning: 0, failed: 0 }).passed++;
+      } else {
+        addCheck(check.name, check.name.replace(/[_:]/g, " "), check.detail, "robotics_trajectory", check.status);
+      }
+      for (const index of check.indices) exclude(index, check.detail, "critical");
+    }
+    const flaggedByEpisode = new Map<string, number>();
+    const key = robotics.summary.episode_column;
+    rows.forEach((row, index) => {
+      if (!excludedIdx.has(index)) return;
+      const entry = key ? Object.entries(row).find(([name]) => name.trim().toLowerCase().replace(/[ .-]/g, "_") === key) : undefined;
+      const group = key ? String(entry?.[1] ?? "(missing episode)") : "Episode 1";
+      flaggedByEpisode.set(group, (flaggedByEpisode.get(group) ?? 0) + 1);
+    });
+    for (const episode of robotics.summary.episodes) episode.flagged_samples = flaggedByEpisode.get(episode.episode_id) ?? 0;
+  }
+
+  // 6. Relationship drift: sensor drift buried in a wide marginal distribution but
   // breaking a near-constant physical ratio (Re/v, Ma/v, P/ρ, …). Excludes trials
   // whose ratio deviates from the clean baseline once a trend is confirmed.
   const RATIO_PAIRS: [string, string][] = [
@@ -215,7 +249,7 @@ export function richValidate(rows: Record<string, unknown>[], simType: Simulatio
     trials_valid: trialsValid,
     trials_excluded: excluded,
     exclusion_rate: rows.length ? excluded / rows.length : 0,
-    training_ready: status !== "failed" && trialsValid >= 1,
+    training_ready: status !== "failed" && trialsValid >= 1 && !robotics?.checks.some((check) => check.status === "warning"),
     processing_ms: Math.round((performance.now() - t0) * 100) / 100,
     all_checks: allChecks,
     unique_checks: uniqueCheckNames.size,
@@ -227,6 +261,7 @@ export function richValidate(rows: Record<string, unknown>[], simType: Simulatio
     statistics,
     checks_by_category: byCat,
     columns_renamed: columnsRenamed,
+    ...(robotics ? { robotics_summary: robotics.summary, robotics_checks: robotics.checks } : {}),
   };
 }
 

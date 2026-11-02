@@ -36,4 +36,4 @@ simapi <command> --help
 ```
 
 `SIMAPI_API_KEY` overrides the saved key; `SIMAPI_BASE_URL` overrides the endpoint
-(default `https://sim-api.vercel.app/api`).
+(default `https://simapilander.vercel.app/api`).

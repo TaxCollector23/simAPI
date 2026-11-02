@@ -29,9 +29,85 @@ def test_validate_physics_only(client, sample_payload):
     assert body["issues"] == body["physics_checks"]
 
 
+def test_robotics_torque_bounds_cannot_be_training_ready(client):
+    data = [{"joint_torque": 250_000 + i} for i in range(20)]
+    response = client.post("/v1/validate/physics-only", json={
+        "data": data,
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["training_ready"] is False
+    assert body["trials_excluded"] == 20
+    assert any(issue["name"] == "robotics_limit:joint_torque" for issue in body["issues"])
+
+
+def test_robotics_model_limits_are_applied_per_joint(client):
+    data = [{"joint_1_position": i / 10} for i in range(10)]
+    response = client.post("/v1/validate/physics-only", json={
+        "data": data,
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_1_position": [-0.25, 0.25]},
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["training_ready"] is False
+    assert body["trials_excluded"] == 7
+    check = next(check for check in body["robotics_checks"] if check["column"] == "joint_1_position")
+    assert check["status"] == "failed"
+    assert check["violations"] == 7
+
+
+def test_robotics_time_order_resets_at_episode_boundary(client):
+    data = [
+        {"episode_id": "a", "time": 0.0, "joint_1_position": 0.0},
+        {"episode_id": "a", "time": 0.1, "joint_1_position": 0.1},
+        {"episode_id": "a", "time": 0.05, "joint_1_position": 0.2},
+        {"episode_id": "b", "time": 0.0, "joint_1_position": 0.3},
+    ]
+    response = client.post("/v1/validate/physics-only", json={
+        "data": data,
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    check = next(check for check in body["robotics_checks"] if check["name"] == "robotics_time_order")
+    assert check["status"] == "failed"
+    assert check["violations"] == 1
+    assert body["training_ready"] is False
+    assert any(item["trial_index"] == 2 for item in body["exclusions"])
+
+
 def test_request_id_header_is_returned(client, sample_payload):
     r = client.post("/v1/validate/physics-only", json=sample_payload)
     assert r.headers.get("X-Request-ID")
+
+
+def test_robotics_trajectory_findings_control_api_verdict(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0, "joint_1_position": 0, "joint_1_velocity": 0},
+                 {"time": 0.1, "joint_1_position": 1, "joint_1_velocity": 0}],
+        "simulation_type": "robotics", "robotics_limits": {"joint_1_velocity": [-2, 2]},
+        "conditions": {"velocity_tolerance": 0.1},
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["training_ready"] is False
+    assert any(check["name"] == "robotics_derived_limit:joint_1_velocity" for check in body["robotics_checks"])
+    assert body["robotics_summary"]["engine_version"] == "manipulation-2"
+    assert body["robotics_summary"]["episodes"][0]["flagged_samples"] == 1
+
+
+def test_robotics_invalid_check_options_are_rejected(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0}], "simulation_type": "robotics", "conditions": {"max_time_step": -1},
+    })
+    assert response.status_code == 422
 
 
 def test_request_id_is_echoed_when_supplied(client):

@@ -84,11 +84,22 @@ const BOUNDS: Record<SimulationType, Record<string, Bound>> = {
     density: [0.001, 2e4],
   },
   robotics: {
-    joint_torque: [-1e4, 1e4],
-    joint_velocity: [-100, 100],
+    joint_torque: [-1e5, 1e5],
+    joint_velocity: [-500, 500],
+    joint_acceleration: [-5e3, 5e3],
     joint_position: [-Math.PI * 4, Math.PI * 4],
-    power_consumption: [0, 1e5],
-    position_error: [0, 10],
+    end_effector_force: [-5e4, 5e4],
+    end_effector_torque: [-1e4, 1e4],
+    end_effector_velocity: [0, 200],
+    position_error: [0, 500],
+    manipulability: [0, 500],
+    condition_number: [1, 1e9],
+    power_consumption: [0, 1e7],
+    efficiency: [0, 1],
+    settling_time: [0, 1e3],
+    rise_time: [0, 1e3],
+    overshoot: [0, 5],
+    workspace_volume: [0, 1e6],
   },
 };
 
@@ -236,7 +247,7 @@ export const SIMULATION_TYPES: { value: SimulationType; label: string }[] = [
 ];
 
 function isNum(v: unknown): v is number {
-  return typeof v === "number" && !Number.isNaN(v);
+  return typeof v === "number" && Number.isFinite(v);
 }
 
 /**
@@ -246,12 +257,25 @@ function isNum(v: unknown): v is number {
 export function validate(
   values: Record<string, unknown>,
   simulationType: SimulationType,
+  roboticsLimits: Record<string, [number, number]> = {},
 ): ValidationReport {
   const t0 = performance.now();
   const checks: CheckResult[] = [];
   const violations: Violation[] = [];
   const recommendations: string[] = [];
   const bounds = { ...UNIVERSAL_BOUNDS, ...BOUNDS[simulationType] };
+
+  if (simulationType === "robotics") {
+    for (const raw of Object.keys(values)) {
+      const key = canonical(raw);
+      if (key.startsWith("joint")) {
+        for (const quantity of ["position", "velocity", "acceleration", "torque"]) {
+          if (key.endsWith(`_${quantity}`)) bounds[key] = BOUNDS.robotics[`joint_${quantity}`];
+        }
+      }
+    }
+    for (const [raw, range] of Object.entries(roboticsLimits)) bounds[canonical(raw)] = range;
+  }
 
   // Canonicalize keys and coerce vectors to magnitudes for bound checks.
   const canon: Record<string, number> = {};
@@ -265,11 +289,21 @@ export function validate(
     if (num !== undefined) canon[key] = num;
   }
 
+  if (simulationType === "robotics") {
+    for (const [key, raw] of Object.entries(values)) {
+      const name = canonical(key);
+      if (name.startsWith("joint") && ["position", "velocity", "acceleration", "torque"].some((quantity) => name.endsWith(`_${quantity}`)) && !(name in canon)) {
+        checks.push({ name: `robotics_missing_${name}`, category: "robotics_limits", status: "failed", detail: `${name} is missing or non-numeric` });
+        violations.push({ field: name, value: String(raw), reason: "Robot signal is missing or non-numeric", severity: "critical" });
+      }
+    }
+  }
+
   // 1. Non-finite guard
   for (const [rawKey, raw] of Object.entries(values)) {
-    if (typeof raw === "number" && Number.isNaN(raw)) {
-      violations.push({ field: rawKey, value: "NaN", reason: "Non-finite value", severity: "critical" });
-      checks.push({ name: `finite_${rawKey}`, category: "input_quality", status: "failed", detail: `${rawKey} is NaN` });
+    if (typeof raw === "number" && !Number.isFinite(raw)) {
+      violations.push({ field: rawKey, value: String(raw), reason: "Non-finite value", severity: "critical" });
+      checks.push({ name: `finite_${rawKey}`, category: "input_quality", status: "failed", detail: `${rawKey} is non-finite` });
     }
   }
 
@@ -292,6 +326,37 @@ export function validate(
         severity: "critical",
       });
       recommendations.push(`Re-check ${key}: ${fmt(v)} is not physically achievable for ${simulationType}.`);
+    }
+  }
+
+  // Robot-model limits override broad plausibility bounds. These are the
+  // limits users should populate from their URDF/controller configuration.
+  if (simulationType === "robotics") {
+    for (const [rawColumn, range] of Object.entries(roboticsLimits)) {
+      const key = canonical(rawColumn);
+      const [lo, hi] = range;
+      const value = canon[key];
+      const exists = value !== undefined;
+      const ok = exists && Number.isFinite(lo) && Number.isFinite(hi) && lo < hi && value >= lo && value <= hi;
+      checks.push({
+        name: `robotics_limit_${key}`,
+        category: "robotics_limits",
+        status: ok ? "passed" : "failed",
+        detail: exists
+          ? `${key}=${fmt(value)}; declared range [${fmt(lo)}, ${fmt(hi)}]`
+          : `Configured robot limit for ${key} could not be checked because the signal is missing`,
+      });
+      if (!ok) {
+        violations.push({
+          field: key,
+          value: exists ? fmt(value) : "missing",
+          reason: exists ? `Outside declared robot limit [${fmt(lo)}, ${fmt(hi)}]` : "Configured robot-limit signal is missing",
+          severity: "critical",
+        });
+        recommendations.push(exists
+          ? `Inspect ${key} against the robot model's declared limits.`
+          : `Include ${key}; a configured robot limit could not be evaluated.`);
+      }
     }
   }
 

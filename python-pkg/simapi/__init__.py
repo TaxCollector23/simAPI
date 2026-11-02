@@ -17,7 +17,7 @@ import urllib.request
 
 __version__ = "1.0.0"
 
-DEFAULT_BASE = os.environ.get("SIMAPI_BASE_URL", "https://sim-api.vercel.app/api")
+DEFAULT_BASE = os.environ.get("SIMAPI_BASE_URL", "https://simapilander.vercel.app/api")
 
 
 class SimAPIError(RuntimeError):
@@ -55,7 +55,13 @@ class SimAPI:
         self.api_key = api_key or os.environ.get("SIMAPI_API_KEY")
         self.base_url = (base_url or DEFAULT_BASE).rstrip("/")
 
-    def validate(self, data, simulation_type: str = "aerodynamics", conditions: dict | None = None) -> dict:
+    def validate(
+        self,
+        data,
+        simulation_type: str = "aerodynamics",
+        conditions: dict | None = None,
+        robotics_limits: dict[str, tuple[float, float]] | None = None,
+    ) -> dict:
         """Validate a JSON file path or a list of trial records."""
         if isinstance(data, str):
             with open(data, encoding="utf-8") as f:
@@ -63,15 +69,25 @@ class SimAPI:
             rows = parsed if isinstance(parsed, list) else parsed.get("data") or parsed.get("trials") or []
             if not conditions and isinstance(parsed, dict):
                 conditions = parsed.get("conditions")
+            if robotics_limits is None and isinstance(parsed, dict):
+                robotics_limits = parsed.get("robotics_limits")
         else:
             rows = data
         body = {"data": rows, "simulation_type": simulation_type, "conditions": conditions or {}}
+        if robotics_limits:
+            body["robotics_limits"] = robotics_limits
         return _request(f"{self.base_url}/v1/validate", "POST", body, self.api_key)
 
     def health(self) -> dict:
         return _request(f"{self.base_url}/v1/health")
 
 
-def validate(data, simulation_type: str = "aerodynamics", conditions: dict | None = None, api_key: str | None = None) -> dict:
+def validate(
+    data,
+    simulation_type: str = "aerodynamics",
+    conditions: dict | None = None,
+    api_key: str | None = None,
+    robotics_limits: dict[str, tuple[float, float]] | None = None,
+) -> dict:
     """Module-level convenience wrapper."""
-    return SimAPI(api_key=api_key).validate(data, simulation_type, conditions)
+    return SimAPI(api_key=api_key).validate(data, simulation_type, conditions, robotics_limits)

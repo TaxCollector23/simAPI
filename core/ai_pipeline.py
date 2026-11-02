@@ -197,7 +197,7 @@ def _call_llm(prompt: str, model: str, timeout: int, max_tokens: int = 1200) -> 
         API_URL, data=payload, method="POST",
         headers={"Authorization": f"Bearer {API_KEY}",
                  "Content-Type": "application/json",
-                 "HTTP-Referer": "https://sim-api.vercel.app",
+                 "HTTP-Referer": "https://simapilander.vercel.app",
                  "X-Title": "SimAPI"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:

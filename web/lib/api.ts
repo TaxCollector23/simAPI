@@ -1,3 +1,4 @@
+import type { RoboticsSummary } from "./robotics-trajectory";
 /**
  * API client for the in-browser validation dashboard (ported from the desktop
  * app). Points at the same-origin serverless routes under /api, so it works for
@@ -12,6 +13,7 @@ export interface ValidationRequest {
   conditions: Record<string, number>;
   run_ai: boolean;
   job_id?: string;
+  robotics_limits?: Record<string, [number, number]>;
 }
 
 export interface Issue {
@@ -71,6 +73,8 @@ export interface AIResult {
 }
 
 export interface ValidationResult {
+  robotics_summary?: RoboticsSummary;
+  robotics_checks?: { name: string; status: "passed" | "warning" | "failed"; detail: string; violations: number }[];
   job_id: string;
   status: "passed" | "warning" | "failed";
   confidence: "high" | "medium" | "low";
