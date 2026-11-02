@@ -19,7 +19,7 @@ const workflow = [
 export function RoboticsCapabilities() {
   return (
     <>
-      <section className="border-b border-white/10 py-20 sm:py-28">
+      <section className="py-20 sm:py-28">
         <div className="container-tight">
           <div className="grid gap-10 lg:grid-cols-[.8fr_1.2fr] lg:gap-20">
             <div>
@@ -38,7 +38,7 @@ export function RoboticsCapabilities() {
         </div>
       </section>
 
-      <section className="border-b border-white/10 py-20 sm:py-28">
+      <section className="py-20 sm:py-28">
         <div className="container-tight">
           <h2 className="max-w-2xl text-balance text-3xl font-medium sm:text-4xl">One validation flow, from data to deployment.</h2>
           <ol className="mt-10 grid gap-8 border-y border-white/10 py-8 sm:grid-cols-2 lg:grid-cols-4">

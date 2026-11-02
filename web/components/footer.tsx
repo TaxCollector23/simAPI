@@ -3,7 +3,7 @@ import { site } from "@/lib/site";
 
 export function Footer() {
   return (
-    <footer className="landing-footer border-t border-white/10 py-12">
+    <footer className="landing-footer py-12">
       <div className="container-tight">
         <div className="grid gap-10 md:grid-cols-[1.5fr_repeat(3,1fr)]">
           <div className="max-w-sm">

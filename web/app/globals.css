@@ -73,7 +73,7 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .landing-nav .landing-mobile-link { color: var(--ink-secondary); }
 .landing-nav .landing-mobile-link:hover { background: #ebe7dd; color: var(--ink); }
 
-.landing-hero { min-height: 690px; padding: 168px 0 94px; border-bottom: 1px solid var(--line); }
+.landing-hero { min-height: 690px; padding: 168px 0 94px; }
 .hero-layout { display: grid; grid-template-columns: minmax(340px, .9fr) minmax(0, 1.1fr); align-items: center; gap: 52px; }
 .hero-copy { max-width: 540px; }
 .hero-context { margin: 0 0 22px; color: var(--amber); font-size: 15px; line-height: 22px; }

@@ -3,7 +3,7 @@ import { ArrowUpRight } from "lucide-react";
 
 export function Cta() {
   return (
-    <section className="border-b border-white/10 py-20 sm:py-24">
+    <section className="py-20 sm:py-24">
       <div className="container-tight flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div className="max-w-2xl">
           <p className="landing-page-kicker">Robotics validation</p>

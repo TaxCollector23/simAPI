@@ -14,24 +14,18 @@ export const site = {
   ],
   footerGroups: [
     { title: "Product", links: [
-      { label: "Platform", href: "/platform" },
+      { label: "How it works", href: "/platform" },
       { label: "Benchmarks", href: "/benchmark" },
+      { label: "Use cases", href: "/use-cases" },
       { label: "Pricing", href: "/pricing" },
-      { label: "Dashboard", href: "/dashboard" },
-      { label: "Changelog", href: "/changelog" },
-      { label: "Status", href: "/status" },
     ] },
     { title: "Developers", links: [
       { label: "Documentation", href: "/docs" },
       { label: "API reference", href: "https://simapidocs.github.io" },
+      { label: "CLI guide", href: "https://github.com/TaxCollector23/simAPI/tree/main/sdk-node#cli" },
       { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
-      { label: "npm", href: "https://www.npmjs.com/package/simapi-cli" },
     ] },
-    { title: "Company", links: [
-      { label: "Blog", href: "/blog" },
-      { label: "FAQ", href: "/faq" },
-      { label: "Roadmap", href: "/roadmap" },
-      { label: "Security", href: "/security" },
+    { title: "Legal", links: [
       { label: "Privacy", href: "/privacy" },
       { label: "Terms", href: "/terms" },
     ] },

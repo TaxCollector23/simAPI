@@ -9,7 +9,7 @@ const entryPoints = [
 
 export function CodeSection() {
   return (
-    <section className="border-b border-white/10 py-20 sm:py-28">
+    <section className="py-20 sm:py-28">
       <div className="container-tight">
         <div className="max-w-2xl">
           <p className="landing-page-kicker">Built for robotics</p>

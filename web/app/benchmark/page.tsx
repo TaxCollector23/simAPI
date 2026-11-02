@@ -42,7 +42,7 @@ export default function BenchmarkMethodologyPage() {
       <section className="relative py-20 sm:py-24">
         <div className="container-tight">
           <SectionHeader
-            eyebrow="Methodology"
+            eyebrow="Put to the test"
             title={<>What we tested, and what we didn&rsquo;t</>}
             lede="Every number on this page is produced by benchmark/run_benchmark_dimensional.py — a script anyone can run. We publish methodology, honest limitations, and negative results. The numbers are not cherry-picked from multiple runs."
           />

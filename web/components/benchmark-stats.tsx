@@ -9,10 +9,9 @@ const detected = results.total_detected;
 
 export function BenchmarkStats() {
   return (
-    <section className="border-b border-white/10 py-20 sm:py-28">
+    <section className="py-20 sm:py-28">
       <div className="container-tight">
         <SectionHeader
-          eyebrow="Put to the test"
           title={<>How it did in our tests</>}
           lede={<>We tested SimAPI on {results.n_train.toLocaleString()} generated samples with six kinds of errors. These results come from test data, not real robot runs.</>}
         />
