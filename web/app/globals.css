@@ -110,7 +110,7 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 
 .landing-page section:not(.landing-hero) { border-color: var(--line); }
 .landing-page .text-white, .landing-page h2, .landing-page h3, .landing-page th { color: var(--ink) !important; }
-.landing-page p[class*="text-white/"], .landing-page td { color: var(--ink-secondary) !important; }
+.landing-page [class*="text-white/"], .landing-page td { color: var(--ink-secondary) !important; }
 .landing-page .text-accent-cyan { color: var(--amber) !important; }
 .landing-page .border-white\/10, .landing-page .border-white\/\[0\.08\], .landing-page .border-white\/\[0\.07\] { border-color: var(--line) !important; }
 .landing-page .bg-ink-900 { background: var(--paper-raised) !important; }
