@@ -10,7 +10,7 @@ Use SimAPI from the web dashboard, CLI, or SDK.
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
-[Open the SimAPI dashboard](https://sim-api.vercel.app/dashboard) · [Read the docs](https://sim-api.vercel.app/docs) · [Use the CLI](https://sim-api.vercel.app/docs/sdks/cli)
+[Open the SimAPI dashboard](https://simapilander.vercel.app/dashboard) · [Read the docs](https://simapilander.vercel.app/docs) · [Use the CLI](https://simapilander.vercel.app/docs/sdks/cli)
 
 </div>
 
@@ -44,9 +44,9 @@ Choose the interface that fits your workflow:
 
 | Interface | Use it for |
 | --- | --- |
-| [Web dashboard](https://sim-api.vercel.app/dashboard) | Get an API key, try validation, and review results. |
-| [CLI](https://sim-api.vercel.app/docs/sdks/cli) | Validate files locally or add a pass/fail check to CI. |
-| [SDK and REST API](https://sim-api.vercel.app/docs) | Call validation from Python, Node.js, or your own application. |
+| [Web dashboard](https://simapilander.vercel.app/dashboard) | Get an API key, try validation, and review results. |
+| [CLI](https://simapilander.vercel.app/docs/sdks/cli) | Validate files locally or add a pass/fail check to CI. |
+| [SDK and REST API](https://simapilander.vercel.app/docs) | Call validation from Python, Node.js, or your own application. |
 
 ### Validate from CI with the CLI
 
@@ -59,7 +59,7 @@ simapi validate simulation.json --type robotics --fail-on warning
 ```
 
 In CI, provide `SIMAPI_API_KEY` as a secret instead of using interactive login.
-`SIMAPI_BASE_URL` defaults to the hosted SimAPI API. See the [CLI guide](https://sim-api.vercel.app/docs/sdks/cli)
+`SIMAPI_BASE_URL` defaults to the hosted SimAPI API. See the [CLI guide](https://simapilander.vercel.app/docs/sdks/cli)
 for install options and command details.
 
 ### Call the API from an application
@@ -79,7 +79,7 @@ curl -X POST https://sim-api.vercel.app/api/v1/validate \
 
 The response includes a `passed`, `warning`, or `failed` status, the checks and
 issues behind it, and whether the data is marked `training_ready`. See the
-[API quickstart](https://sim-api.vercel.app/docs/quickstart) for Python and
+[API quickstart](https://simapilander.vercel.app/docs/quickstart) for Python and
 Node.js examples.
 
 ## What gets checked
