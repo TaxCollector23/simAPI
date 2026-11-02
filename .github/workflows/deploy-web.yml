@@ -1,7 +1,7 @@
 name: Deploy web + re-alias
 
 # Deploys the marketing site to Vercel production and re-points
-# sim-api.vercel.app at the fresh deployment on every push to main.
+# simapilander.vercel.app at the fresh deployment on every push to main.
 #
 # Also redeploys the mirror projects (simapiplayground/status/quicklinks) —
 # same codebase, gated by the SIMAPI_SITE_MODE env var on each project (see
@@ -47,11 +47,11 @@ jobs:
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "Deployed: $url"
 
-      - name: Re-alias sim-api.vercel.app
+      - name: Re-alias simapilander.vercel.app
         run: |
-          vercel alias set "${{ steps.deploy.outputs.url }}" sim-api.vercel.app \
+          vercel alias set "${{ steps.deploy.outputs.url }}" simapilander.vercel.app \
             --token="${{ secrets.VERCEL_TOKEN }}"
-          echo "sim-api.vercel.app now points at ${{ steps.deploy.outputs.url }}"
+          echo "simapilander.vercel.app now points at ${{ steps.deploy.outputs.url }}"
 
   deploy-mirrors:
     runs-on: ubuntu-latest

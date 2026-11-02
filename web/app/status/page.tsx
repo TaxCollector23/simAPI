@@ -1,68 +1,50 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
 
-interface Component { name: string; endpoint?: string }
-const COMPONENTS: Component[] = [
-  { name: "Validation API", endpoint: "https://sim-api.vercel.app/api/v1/health" },
-  { name: "Pre-flight API", endpoint: "https://sim-api.vercel.app/api/v1/health" },
-  { name: "Dashboard", endpoint: "https://sim-api.vercel.app" },
-  { name: "Documentation", endpoint: "https://simapidocs.github.io" },
-  { name: "npm registry (simapi-cli)" },
-];
+type Health = { status: string; engine: string; python_backend: boolean; domains: number };
 
 export default function StatusPage() {
-  const [state, setState] = useState<Record<string, "up" | "down" | "checking">>({});
+  const [health, setHealth] = useState<Health | null>(null);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
-    COMPONENTS.forEach(async (c) => {
-      if (!c.endpoint) { setState((s) => ({ ...s, [c.name]: "up" })); return; }
-      setState((s) => ({ ...s, [c.name]: "checking" }));
-      try {
-        await fetch(c.endpoint, { mode: "no-cors", signal: AbortSignal.timeout(6000) });
-        setState((s) => ({ ...s, [c.name]: "up" }));
-      } catch {
-        setState((s) => ({ ...s, [c.name]: "down" }));
-      }
-    });
+    fetch("/api/v1/health", { cache: "no-store", signal: AbortSignal.timeout(6000) })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Health check failed");
+        return response.json() as Promise<Health>;
+      })
+      .then(setHealth)
+      .catch(() => setError(true));
   }, []);
 
-  const allUp = COMPONENTS.every((c) => state[c.name] === "up");
-
   return (
-    <div className="container-tight pt-32 pb-24">
-      <div className="mx-auto max-w-2xl">
-        <div className={`rounded-2xl border p-6 ${allUp ? "border-pass/25 bg-pass/[0.05]" : "border-white/[0.08] bg-ink-900/50"}`}>
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className={`h-6 w-6 ${allUp ? "text-pass" : "text-white/40"}`} />
-            <h1 className="text-xl font-semibold text-white">{allUp ? "All systems operational" : "Checking systems…"}</h1>
+    <div className="container-tight pb-24 pt-36 sm:pt-44">
+      <div className="max-w-3xl">
+        <p className="text-sm font-medium text-accent-cyan">Service status</p>
+        <h1 className="mt-5 text-4xl font-medium text-white sm:text-5xl">What the site can reach</h1>
+        <p className="mt-5 text-base leading-7 text-white/65">This page checks the current website API from your browser. It does not measure historical uptime.</p>
+        <div className="mt-10 divide-y divide-white/10 rounded-xl border border-white/10 bg-ink-900">
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+            <span className="text-white/80">Website API</span>
+            <span className={error ? "text-fail" : health ? "text-pass" : "text-white/50"}>
+              {error ? "Unavailable" : health ? "Responding" : "Checking"}
+            </span>
           </div>
-          <p className="mt-2 text-sm text-white/45">Live checks run from your browser against each public component.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+            <span className="text-white/80">Validation engine</span>
+            <span className="font-mono text-sm text-white/65">
+              {health ? (health.python_backend ? "Python dimensional engine" : "TypeScript fallback") : "Unknown"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 p-5">
+            <span className="text-white/80">Domains reported by health check</span>
+            <span className="font-mono text-sm text-white/65">{health?.domains ?? "Unknown"}</span>
+          </div>
         </div>
-
-        <div className="mt-6 overflow-hidden rounded-2xl border border-white/[0.08]">
-          {COMPONENTS.map((c) => {
-            const st = state[c.name];
-            return (
-              <div key={c.name} className="flex items-center justify-between border-b border-white/[0.05] px-5 py-3.5 last:border-0">
-                <span className="text-sm text-white/70">{c.name}</span>
-                {st === "up" ? <span className="flex items-center gap-1.5 text-xs text-pass"><span className="h-2 w-2 rounded-full bg-pass" /> Operational</span>
-                  : st === "down" ? <span className="flex items-center gap-1.5 text-xs text-amber-400"><span className="h-2 w-2 rounded-full bg-amber-400" /> Degraded</span>
-                  : <span className="flex items-center gap-1.5 text-xs text-white/35"><Loader2 className="h-3 w-3 animate-spin" /> Checking</span>}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-6 grid grid-cols-3 gap-4">
-          {[["99.9%", "target uptime"], ["<30ms", "median physics latency"], ["21", "domains covered"]].map(([v, l]) => (
-            <div key={l} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4 text-center">
-              <p className="font-mono text-xl font-semibold text-accent-cyan">{v}</p>
-              <p className="mt-0.5 text-[11px] text-white/40">{l}</p>
-            </div>
-          ))}
-        </div>
+        {health && !health.python_backend && (
+          <p className="mt-5 text-sm leading-6 text-white/60">The full Python backend is not connected to this site; validation uses the TypeScript fallback.</p>
+        )}
       </div>
     </div>
   );

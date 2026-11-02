@@ -1,53 +1,17 @@
 export const site = {
   name: "SimAPI",
-  domain: "sim-api.vercel.app",
-  url: "https://sim-api.vercel.app",
-  tagline: "Validate simulation data before it reaches AI training or robotics.",
+  domain: "simapilander.vercel.app",
+  url: "https://simapilander.vercel.app",
+  tagline: "Simulations you can trust",
   description:
-    "Simulation CI/CD for Physical AI and robotics. Validate simulation data against physical constraints before it trains a model or reaches an autonomy stack. Use the hosted service from the web dashboard, CLI, or SDK.",
+    "SimAPI validates simulation data for Physical AI and robotics. Review findings in the browser or use the CLI and SDK to gate a pipeline.",
   github: "https://github.com/TaxCollector23/simAPI",
   nav: [
+    { label: "Use cases", href: "/use-cases" },
     { label: "Platform", href: "/platform" },
-    { label: "Benchmarks", href: "/benchmark" },
-    { label: "Pricing", href: "/pricing" },
+    { label: "Benchmark", href: "/benchmark" },
     { label: "Docs", href: "/docs" },
-    { label: "Changelog", href: "/changelog" },
-    { label: "Blog", href: "/blog" },
-    { label: "Dashboard", href: "/dashboard" },
   ],
-  navGroups: [
-    {
-      label: "Product",
-      items: [
-        { label: "Dashboard", href: "/dashboard", desc: "Access your API keys, usage analytics, and playground." },
-        { label: "Platform", href: "/platform", desc: "The validation engine, AI orchestrator, and pre-flight checks." },
-        { label: "Enterprise Workflows", href: "/enterprise-workflows", desc: "Best practices for production integration." },
-        { label: "Use Cases", href: "/use-cases", desc: "Real-world impact from aerospace to semiconductors." },
-        { label: "Benchmarks", href: "/benchmark", desc: "Full methodology, dataset, and honest limitations." },
-        { label: "Pricing", href: "/pricing", desc: "Plans and API quotas." },
-      ],
-    },
-    {
-      label: "Developers",
-      items: [
-        { label: "Documentation", href: "/docs", desc: "Quick start, API reference, CLI." },
-        { label: "API reference", href: "https://simapidocs.github.io", desc: "Full endpoint docs.", external: true },
-        { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI", desc: "Source, issues, and PRs.", external: true },
-        { label: "npm — simapi-cli", href: "https://www.npmjs.com/package/simapi-cli", desc: "`npm install -g simapi-cli`", external: true },
-      ],
-    },
-    {
-      label: "Company",
-      items: [
-        { label: "Blog", href: "/blog", desc: "The SimAPI Journal." },
-        { label: "FAQ", href: "/faq", desc: "Common questions." },
-        { label: "Changelog", href: "/changelog", desc: "Every release, honestly described." },
-        { label: "Roadmap", href: "/roadmap", desc: "Shipped, in progress, and planned." },
-        { label: "Status", href: "/status", desc: "Live system status." },
-        { label: "Security", href: "/security", desc: "How we handle keys and data." },
-      ],
-    },
-  ] satisfies { label: string; items: { label: string; href: string; desc: string; external?: boolean }[] }[],
   footerGroups: [
     { title: "Product", links: [
       { label: "Platform", href: "/platform" },

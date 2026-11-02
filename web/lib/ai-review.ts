@@ -129,7 +129,7 @@ async function callModel(
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://sim-api.vercel.app",
+        "HTTP-Referer": "https://simapilander.vercel.app",
         "X-Title": "SimAPI",
       },
       body: JSON.stringify(body),

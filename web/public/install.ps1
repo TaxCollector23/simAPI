@@ -1,8 +1,8 @@
 # SimAPI CLI installer (Windows PowerShell)
-#   irm https://sim-api.vercel.app/install.ps1 | iex
+#   irm https://simapilander.vercel.app/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$repo = "https://raw.githubusercontent.com/TaxCollector23/SimAPI-YC-/main"
+$repo = "https://raw.githubusercontent.com/TaxCollector23/simAPI/main"
 $dest = "$env:USERPROFILE\.simapi\bin"
 
 Write-Host "`n  Installing the SimAPI CLI..."

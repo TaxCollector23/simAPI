@@ -1,74 +1,32 @@
 import type { Metadata } from "next";
-import { Plane, Battery, Cpu, Building2, FlaskConical } from "lucide-react";
+import Link from "next/link";
+import { ArrowUpRight } from "lucide-react";
 import { PageHero } from "@/components/ui/page-hero";
-import { Reveal } from "@/components/ui/reveal";
 import { Cta } from "@/components/cta";
 
 export const metadata: Metadata = {
-  title: "Use Cases",
-  description: "How teams use SimAPI's validation layer across aerospace, automotive, semiconductor, structural, and research simulation pipelines.",
+  title: "Use cases",
+  description: "Use SimAPI to check simulation data for Physical AI training and robotics workflows.",
 };
 
 const cases = [
   {
-    icon: Plane,
-    domain: "Aerospace & defense",
-    workflow: "Pre-flight mesh validation",
-    problem: "Mesh generation bugs produce invalid CFD results, and manual mesh inspection is slow.",
-    approach: "Run preflight checks — watertightness, BC coverage, solver config — before the solver starts.",
-    benefits: [
-      "30+ automated mesh quality checks",
-      "Solver restarts avoided when mesh is validated first",
-      "Confidence score carried into the design record",
-    ],
+    index: "01",
+    name: "Physical AI",
+    question: "Should this simulation data reach training?",
+    description: "Synthetic training data can carry solver failures, unit errors, and outliers into a model. Validate batches before they are accepted into a dataset.",
+    input: "Simulation trials and conditions",
+    result: "A status, issue list, and training_ready signal",
+    check: "Inspect excluded and review-flagged rows separately before making a dataset decision.",
   },
   {
-    icon: Battery,
-    domain: "Automotive & energy",
-    workflow: "Thermal & electrochemical QA",
-    problem: "Batch simulation jobs occasionally produce NaN, divergence, or unit-error results that need manual triage.",
-    approach: "Validate every trial post-solver; the engine flags and explains what it excluded.",
-    benefits: [
-      "11+ corruption types detected automatically",
-      "99% precision on flagged exclusions",
-      "Plain-language explanation for every flag",
-    ],
-  },
-  {
-    icon: Cpu,
-    domain: "Semiconductors & photonics",
-    workflow: "Design-iteration regression testing",
-    problem: "Optical and EM simulations have no automated QA — a bad result can reach a tape-out decision.",
-    approach: "Validate on every design iteration inside CI, and diff against the last known-good run.",
-    benefits: [
-      "Catches corrupted datasets that pass visual inspection",
-      "Regression testing across solver/library upgrades",
-      "Validation history attached to each design review",
-    ],
-  },
-  {
-    icon: Building2,
-    domain: "Civil & structural",
-    workflow: "Cross-team validation standard",
-    problem: "Independent teams run FEA with drifting assumptions, producing inconsistent results across a firm.",
-    approach: "Set one validation policy — no model ships to a client without a passing SimAPI run.",
-    benefits: [
-      "Catches unit mismatches and BC inconsistencies early",
-      "One shared standard across disciplines",
-      "Audit trail attached to every client deliverable",
-    ],
-  },
-  {
-    icon: FlaskConical,
-    domain: "Research & academia",
-    workflow: "Publication-ready validation",
-    problem: "MD and computational chemistry runs have high outlier rates — hard to tell a bug from a rare event.",
-    approach: "The AI layer classifies anomalies (divergence vs. plausible rare physics) and the log ships with the paper.",
-    benefits: [
-      "Automated detection of clear simulation failures",
-      "Interpretable reasoning, not just a flag",
-      "Reproducible validation methodology for peer review",
-    ],
+    index: "02",
+    name: "Robotics",
+    question: "Does this run obey the robot's basic physical constraints?",
+    description: "The robotics domain includes checks for end effector speed magnitude, manipulability, workspace volume, overshoot, response times, and load versus torque relationships when those fields are present.",
+    input: "Robot simulation output as a file or API payload",
+    result: "Check results and a pass, warning, or failed verdict",
+    check: "Use the verdict as a CI gate, then inspect the specific finding before changing a controller or policy.",
   },
 ];
 
@@ -77,49 +35,33 @@ export default function UseCases() {
     <>
       <PageHero
         eyebrow="Use cases"
-        title={<>Where the validation layer earns its keep</>}
-        lede="Five workflows, drawn from where teams actually place SimAPI in a simulation pipeline — not hypothetical, not case studies with numbers we can't stand behind."
+        title={<>Quality gates for simulated worlds</>}
+        lede="SimAPI checks what a run produced before the data moves into training or a robotics workflow."
       />
-
-      <section className="container-tight pb-16">
-        <div className="grid gap-4">
-          {cases.map((c, i) => (
-            <Reveal key={c.workflow} delay={i * 0.04}>
-              <div className="grid gap-6 rounded-2xl border border-white/[0.08] bg-ink-900/50 p-6 sm:grid-cols-[220px_1fr] sm:p-8">
-                <div>
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                    <c.icon className="h-5 w-5 text-accent-cyan" />
-                  </div>
-                  <div className="mt-3 text-xs uppercase tracking-[0.1em] text-white/40">{c.domain}</div>
-                  <h3 className="mt-1 text-[17px] font-semibold text-white">{c.workflow}</h3>
-                </div>
-                <div className="grid gap-4 border-t border-white/[0.06] pt-5 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
-                  <div>
-                    <div className="text-xs font-medium uppercase tracking-[0.08em] text-white/35">Challenge</div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-white/60">{c.problem}</p>
-                  </div>
-                  <div>
-                    <div className="text-xs font-medium uppercase tracking-[0.08em] text-white/35">Approach</div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-white/60">{c.approach}</p>
-                  </div>
-                  <div>
-                    <div className="text-xs font-medium uppercase tracking-[0.08em] text-white/35">Benefits</div>
-                    <ul className="mt-1.5 space-y-1.5">
-                      {c.benefits.map((b, j) => (
-                        <li key={j} className="flex gap-2 text-sm text-white/60">
-                          <span className="text-accent-cyan/70">—</span>
-                          {b}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
+      <section className="container-tight py-16 sm:py-24">
+        <div className="divide-y divide-white/10 border-y border-white/10">
+          {cases.map((item) => (
+            <article key={item.name} className="grid gap-8 py-10 lg:grid-cols-[220px_1fr] lg:gap-16 lg:py-14">
+              <div>
+                <span className="font-mono text-sm text-accent-cyan">{item.index}</span>
+                <h2 className="mt-3 text-3xl font-medium text-white">{item.name}</h2>
               </div>
-            </Reveal>
+              <div>
+                <h3 className="max-w-2xl text-balance text-2xl font-medium leading-snug text-white">{item.question}</h3>
+                <p className="mt-5 max-w-2xl text-base leading-7 text-white/70">{item.description}</p>
+                <dl className="mt-8 grid gap-6 border-t border-white/10 pt-6 sm:grid-cols-2">
+                  <div><dt className="text-sm text-white/50">Input</dt><dd className="mt-2 text-sm leading-6 text-white/85">{item.input}</dd></div>
+                  <div><dt className="text-sm text-white/50">Result</dt><dd className="mt-2 text-sm leading-6 text-white/85">{item.result}</dd></div>
+                </dl>
+                <p className="mt-7 max-w-2xl border-l-2 border-accent-cyan pl-5 text-sm leading-6 text-white/70">{item.check}</p>
+              </div>
+            </article>
           ))}
         </div>
+        <Link href="/play" className="mt-8 inline-flex items-center gap-2 text-sm font-medium text-accent-cyan hover:text-white">
+          Try a validation <ArrowUpRight className="h-4 w-4" />
+        </Link>
       </section>
-
       <Cta />
     </>
   );

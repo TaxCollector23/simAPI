@@ -4,17 +4,16 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Play, RefreshCw, Loader2, CheckCircle, XCircle,
-  AlertTriangle, ChevronDown, ChevronUp, Key, Copy,
-  Check, Plus, Trash2, Info, Sparkles, Timer, X,
+  AlertTriangle, ChevronDown, ChevronUp,
+  Plus, Trash2, Info, Timer, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PreflightPanel } from "./preflight-panel";
 import { HistoryPanel } from "./history-panel";
 import { DimensionalResultPanel } from "./dimensional-result-panel";
 import { recordRun } from "@/lib/run-history";
-import { touchKey } from "@/lib/dashboard-store";
 import {
-  validate, runDemo, validateDimensional, pollAI, generateKey,
+  validate, runDemo, validateDimensional, pollAI,
   DEMO_KEY, healthCheck,
   type ValidationResult, type Issue, type DimensionalResult,
 } from "@/lib/api";
@@ -257,7 +256,7 @@ function IssueRow({ issue }: { issue: Issue & { human_name?: string } }) {
           {fail ? "✗" : "⚠"}
         </span>
         <span className="min-w-0 flex-1 text-xs text-white/75 font-medium leading-snug">{name}</span>
-        <span className={cn("text-[10px] shrink-0 rounded px-1.5 py-0.5 border font-mono",
+        <span className={cn("text-sm shrink-0 rounded px-1.5 py-0.5 border font-mono",
           fail ? "border-red-400/20 text-red-400/60" : "border-amber-400/20 text-amber-400/60")}>
           {issue.category}
         </span>
@@ -299,13 +298,12 @@ function AiProgressBar({ budgetMs = 18000 }: { budgetMs?: number }) {
 }
 
 export function ValidationDashboard() {
-  const simConfig  = SIM_TYPES[0];
+  const simConfig  = SIM_TYPES.find((type) => type.value === "robotics") ?? SIM_TYPES[0];
   const [selectedSim, setSelectedSim] = useState(simConfig);
   const [conditions, setConditions]   = useState<Record<string, number>>(
     Object.fromEntries(simConfig.conditions.map(c => [c.key, c.default]))
   );
   const [rawInput,  setRawInput]    = useState(JSON.stringify(simConfig.example, null, 2));
-  const [apiKey,    setApiKey]      = useState(DEMO_KEY);
   const [phase,     setPhase]       = useState<"idle"|"running"|"done"|"error">("idle");
   const [engineMode, setEngineMode] = useState<"legacy"|"dimensional">("legacy");
   const [result,    setResult]      = useState<ValidationResult | null>(null);
@@ -327,8 +325,6 @@ export function ValidationDashboard() {
   const [showAll,   setShowAll]     = useState(false);
   const [showStats, setShowStats]   = useState(false);
   const [aiPoll,    setAiPoll]      = useState(false);
-  const [keyGen,    setKeyGen]      = useState(false);
-  const [copied,    setCopied]      = useState(false);
   const [tab,       setTab]         = useState<"preflight"|"output"|"history">("output");
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -404,7 +400,7 @@ export function ValidationDashboard() {
         try { data = JSON.parse(rawInput); }
         catch { throw new Error("Invalid JSON. Check your input above."); }
         if (!Array.isArray(data)) throw new Error("Input must be a JSON array: [{...}, {...}, ...]");
-        res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true }, apiKey);
+        res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true }, DEMO_KEY);
       }
       setResult(res); setPhase("done");
       recordRun({
@@ -416,7 +412,6 @@ export function ValidationDashboard() {
         issues: (res.issues ?? []).map((i) => ({ name: i.name, human_name: i.human_name ?? i.name, status: i.status })),
         raw: res,
       });
-      if (apiKey !== DEMO_KEY) touchKey();
       if (res.job_id) startPoll(res.job_id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -464,7 +459,7 @@ export function ValidationDashboard() {
             n_impossible: dres.n_impossible, n_inconsistent: dres.n_inconsistent,
           });
         } else {
-          const res = await validate({ data, simulation_type: selectedSim.value, conditions: sweepConditions, run_ai: false }, apiKey);
+          const res = await validate({ data, simulation_type: selectedSim.value, conditions: sweepConditions, run_ai: false }, DEMO_KEY);
           results.push({ value, status: res.status, trials_excluded: res.trials_excluded, n_impossible: 0, n_inconsistent: 0 });
         }
       }
@@ -492,40 +487,26 @@ export function ValidationDashboard() {
     }
   }
 
-  async function genKey() {
-    setKeyGen(true);
-    try { const k = await generateKey("My Key"); setApiKey(k.api_key); }
-    catch { setError("Could not generate key — is the API server running?"); }
-    finally { setKeyGen(false); }
-  }
-
   const issues = result?.issues ?? [];
   const visible = showAll ? issues : issues.slice(0, 8);
 
   return (
-    <div>
+    <div className="validator-app">
 
       {/* Top bar */}
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/[0.06] bg-ink-900/50 px-5 py-3">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
         <div>
-          <h1 className="text-base font-semibold text-white">Simulation Validator</h1>
-          <p className="text-xs text-white/35">Paste data · Configure · Run physics checks + AI analysis</p>
+          <h1 className="text-2xl font-medium text-white">Simulation validation</h1>
+          <p className="mt-2 text-sm text-white/60">Load a sample, set the domain and conditions, then inspect the findings</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs",
-            serverUp === null   ? "border-white/10 text-white/30" :
-            serverUp            ? "border-pass/30 bg-pass/5 text-pass" :
-                                  "border-red-400/30 bg-red-400/5 text-red-400")}>
-            <span className={cn("h-1.5 w-1.5 rounded-full",
-              serverUp ? "bg-pass animate-pulse" : serverUp === false ? "bg-red-400" : "bg-white/20")} />
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <span className={serverUp === null ? "text-white/50" : serverUp ? "text-pass" : "text-fail"}>
             {serverUp === null ? "Checking..." : serverUp ? "API online" : "API offline"}
           </span>
           {engineMode === "dimensional" ? (
-            <span className="rounded-full border border-accent-cyan/30 bg-accent-cyan/5 px-2.5 py-1.5 text-[10px] text-accent-cyan">
-              Dimensional analysis (new architecture)
-            </span>
+            <span className="text-white/55">Dimensional analysis</span>
           ) : result && "engine" in result && (
-            <span className="rounded-full border border-accent-cyan/30 bg-accent-cyan/5 px-2.5 py-1.5 text-[10px] text-accent-cyan">
+            <span className="text-white/55">
               {String((result as Record<string, unknown>).engine) === "python-dimensional" ? "Standard report (dimensional engine)" : "Lite engine (20 checks)"}
             </span>
           )}
@@ -555,7 +536,7 @@ export function ValidationDashboard() {
 
           {/* Engine selector */}
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
-            <label className="text-xs uppercase tracking-widest text-white/35 block mb-2">Validation Engine</label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Validation engine</label>
             <div className="flex gap-1 rounded-xl border border-white/[0.06] bg-black/20 p-1">
               {([
                 ["legacy", "Standard report"],
@@ -568,16 +549,16 @@ export function ValidationDashboard() {
                 </button>
               ))}
             </div>
-            <p className="mt-2 text-[10px] text-white/25 leading-relaxed">
+            <p className="mt-2 text-sm text-white/55 leading-relaxed">
               {engineMode === "dimensional"
-                ? "~25 rules: units resolution, Pi-group discovery, anchored physical constants, and a response-surface residual layer — replaces per-column checks with dimensional analysis. Shows every layer's raw findings."
-                : "The same dimensional-analysis engine, summarized into the CLI/SDK-compatible report shape (status, issues, exclusions), plus an AI second pass."}
+                ? "See the dimensional analysis layers and their raw findings."
+                : "A summary of status, issues, and exclusions. Optional AI review adds a separate second pass."}
             </p>
           </div>
 
           {/* Simulation type */}
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
-            <label className="text-xs uppercase tracking-widest text-white/35 block mb-2">Simulation Type</label>
+            <label className="mb-2 block text-sm font-medium text-white/75">Simulation type</label>
             <select
               value={selectedSim.value}
               onChange={e => changeSim(e.target.value)}
@@ -590,19 +571,19 @@ export function ValidationDashboard() {
           {/* Dynamic conditions -- always shown now: even domains with no
               predefined conditions can have custom ones added. */}
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
-            <label className="text-xs uppercase tracking-widest text-white/35 block mb-3">
-              Simulation Conditions
+            <label className="mb-3 block text-sm font-medium text-white/75">
+              Simulation conditions
             </label>
             <div className="space-y-2.5">
               {[...selectedSim.conditions, ...customConditions].map(c => (
                 <div key={c.key}>
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <label className="min-w-0 flex-1 truncate text-xs text-white/50">{c.label}</label>
+                    <label className="min-w-0 flex-1 truncate text-sm text-white/65">{c.label}</label>
                     <div className="flex shrink-0 items-center gap-2">
-                      {c.unit && <span className="text-[10px] text-white/25 font-mono">{c.unit}</span>}
+                      {c.unit && <span className="text-sm text-white/55 font-mono">{c.unit}</span>}
                       <button
                         onClick={() => setSweepKey(k => k === c.key ? null : c.key)}
-                        className={cn("rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide",
+                        className={cn("rounded px-1.5 py-0.5 text-xs font-medium",
                           sweepKey === c.key ? "bg-accent-blue/25 text-accent-blue" : "bg-white/[0.06] text-white/35 hover:text-white/60")}
                         title="Sweep this condition across a range"
                       >
@@ -642,7 +623,7 @@ export function ValidationDashboard() {
                 placeholder="Add a condition (e.g. ambient_pressure)"
                 className="w-full bg-black/20 border border-white/[0.06] rounded-lg px-3 py-1.5 text-xs text-white/60 outline-none focus:border-accent-blue/40"
               />
-              <button onClick={addCondition} className="shrink-0 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs text-white/50 hover:bg-white/[0.1] hover:text-white/80">
+              <button onClick={addCondition} className="shrink-0 rounded-lg bg-white/[0.06] px-3 py-1.5 text-sm text-white/65 hover:bg-white/[0.1] hover:text-white/80">
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
@@ -659,7 +640,7 @@ export function ValidationDashboard() {
 
             {sweepResults && (
               <div className="mt-3 overflow-hidden rounded-lg border border-white/[0.08]">
-                <table className="w-full text-[11px]">
+                <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-white/[0.08] bg-white/[0.02] text-white/40">
                       <th className="p-1.5 text-left font-medium">{sweepKey}</th>
@@ -680,7 +661,7 @@ export function ValidationDashboard() {
                     ))}
                   </tbody>
                 </table>
-                <p className="border-t border-white/[0.08] bg-black/20 p-1.5 text-[10px] text-white/25">
+                <p className="border-t border-white/[0.08] bg-black/20 p-1.5 text-sm text-white/55">
                   Each row re-ran the same dataset with {sweepKey} set to that value — a sweep shows how sensitive
                   the validation is to that condition, not just a single spot-check.
                 </p>
@@ -688,39 +669,11 @@ export function ValidationDashboard() {
             )}
           </div>
 
-          {/* API key */}
-          {engineMode === "legacy" && (
-          <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs uppercase tracking-widest text-white/35 flex items-center gap-1.5">
-                <Key className="h-3 w-3" /> API Key
-              </label>
-              <button onClick={genKey} disabled={keyGen}
-                className="text-xs text-accent-cyan hover:text-white transition-colors flex items-center gap-1">
-                {keyGen ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                Generate new
-              </button>
-            </div>
-            <div className="flex items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-lg bg-black/30 border border-white/[0.06] px-3 py-2 font-mono text-xs text-white/55">
-                {apiKey}
-              </code>
-              <button onClick={() => { navigator.clipboard.writeText(apiKey); setCopied(true); setTimeout(()=>setCopied(false),1800); }}
-                className="shrink-0 rounded-lg border border-white/10 p-2 text-white/35 hover:text-white transition-colors">
-                {copied ? <Check className="h-3.5 w-3.5 text-pass" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-            <p className="mt-1.5 text-[10px] text-white/20">
-              {apiKey === DEMO_KEY ? "Shared demo key · Click Generate for a permanent key" : "Your key · active now"}
-            </p>
-          </div>
-          )}
-
           {/* Data input */}
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-xs uppercase tracking-widest text-white/35">Data (JSON array)</label>
-              <span className="text-[10px] text-white/20">Cd, cd, drag_coefficient — all recognized</span>
+              <label className="text-sm text-white/60">Data (JSON array)</label>
+              <span className="text-sm text-white/20">Cd, cd, drag_coefficient — all recognized</span>
             </div>
             <textarea
               value={rawInput}
@@ -730,7 +683,7 @@ export function ValidationDashboard() {
               placeholder={`[\n  {"cd": 0.312, "cl": 0.847, "re": 415000},\n  ...\n]`}
               spellCheck={false}
             />
-            <p className="mt-2 text-[10px] text-white/25">
+            <p className="mt-2 text-sm text-white/55">
               Each object is one simulation trial. Column names are auto-normalized.
             </p>
           </div>
@@ -755,7 +708,7 @@ export function ValidationDashboard() {
           {/* Info box */}
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 flex gap-3">
             <Info className="h-4 w-4 text-accent-cyan shrink-0 mt-0.5" />
-            <div className="text-xs text-white/35 leading-relaxed space-y-1">
+            <div className="text-sm text-white/60 leading-relaxed space-y-1">
               <p>Physics checks run instantly (~300ms). AI analysis follows in the background and appears automatically.</p>
               <p>All column names are normalized — send <code className="font-mono text-white/50">Cd</code>, <code className="font-mono text-white/50">cd</code>, or <code className="font-mono text-white/50">drag_coefficient</code>.</p>
             </div>
@@ -799,7 +752,7 @@ export function ValidationDashboard() {
               <p className="font-medium text-red-400">Validation failed</p>
               <p className="text-sm text-red-400/70">{error}</p>
               {error?.includes("offline") && (
-                <code className="block bg-black/30 rounded-lg px-4 py-3 font-mono text-xs text-white/50">python launch.py</code>
+                <code className="block bg-black/30 rounded-lg px-4 py-3 font-mono text-sm text-white/65">python launch.py</code>
               )}
             </div>
           )}
@@ -843,7 +796,7 @@ export function ValidationDashboard() {
                     ].map(m => (
                       <div key={m.l} className="rounded-xl bg-white/[0.03] border border-white/[0.05] p-3 text-center">
                         <p className={cn("font-mono text-xl font-semibold", m.c)}>{m.v}</p>
-                        <p className="text-[10px] text-white/30 mt-0.5 uppercase tracking-wider">{m.l}</p>
+                        <p className="text-sm text-white/30 mt-0.5 uppercase tracking-wider">{m.l}</p>
                       </div>
                     ))}
                   </div>
@@ -868,7 +821,7 @@ export function ValidationDashboard() {
                 {/* Concrete fixes -- plain language, specific to this dataset */}
                 {result.concrete_fixes && result.concrete_fixes.length > 0 && (
                   <div className="rounded-2xl border border-accent-blue/20 bg-accent-blue/[0.04] p-5">
-                    <p className="mb-3 text-xs uppercase tracking-widest text-accent-blue/70">What to do about it</p>
+                    <p className="mb-3 text-xs text-accent-blue/70">What to do about it</p>
                     <ul className="space-y-2">
                       {result.concrete_fixes.map((fix, i) => (
                         <li key={i} className="flex gap-2 text-sm leading-relaxed text-white/70">
@@ -883,7 +836,7 @@ export function ValidationDashboard() {
                 {/* Statistics, in plain English */}
                 {result.statistics_plain && result.statistics_plain.length > 0 && (
                   <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5">
-                    <p className="mb-3 text-xs uppercase tracking-widest text-white/30">
+                    <p className="mb-3 text-xs text-white/30">
                       What your data looks like (no stats background needed)
                     </p>
                     <ul className="space-y-1.5">
@@ -896,7 +849,7 @@ export function ValidationDashboard() {
 
                 {/* Check bar */}
                 <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5">
-                  <p className="text-xs uppercase tracking-widest text-white/30 mb-4">
+                  <p className="text-xs text-white/30 mb-4">
                     {result.unique_checks ?? "—"} core rules validated across {result.trials_submitted.toLocaleString()} trials — only issues shown below
                   </p>
                   {[
@@ -923,7 +876,7 @@ export function ValidationDashboard() {
                     </p>
                     <div className="flex flex-wrap gap-2">
                       {Object.entries(result.columns_renamed).map(([from, to]) => (
-                        <span key={from} className="font-mono text-[10px] bg-black/20 rounded px-2 py-1 text-white/45">
+                        <span key={from} className="font-mono text-sm bg-black/20 rounded px-2 py-1 text-white/45">
                           {from} → {to}
                         </span>
                       ))}
@@ -933,7 +886,7 @@ export function ValidationDashboard() {
 
                 {/* Issues — plain English, expandable */}
                 <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5">
-                  <p className="text-xs uppercase tracking-widest text-white/30 mb-3">
+                  <p className="text-xs text-white/30 mb-3">
                     {issues.length === 0
                       ? `All ${result.unique_checks ?? ""} core rules passed across ${result.trials_submitted} trials`
                       : `${issues.length} issue${issues.length !== 1 ? "s" : ""} found — click to expand`}
@@ -963,7 +916,7 @@ export function ValidationDashboard() {
                     positives); AI exclusions are reasoning-based (higher recall, clearly labeled). */}
                 {result.exclusions.length > 0 && (
                   <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5">
-                    <p className="text-xs uppercase tracking-widest text-white/30 mb-3">
+                    <p className="text-xs text-white/30 mb-3">
                       {result.exclusions.length} trial{result.exclusions.length !== 1 ? "s" : ""} excluded from ML pipeline
                     </p>
                     <div className="space-y-1.5">
@@ -981,8 +934,8 @@ export function ValidationDashboard() {
                             </span>
                             <span className="text-white/40 flex-1">{(e as { reason?: string }).reason}</span>
                             {isAiFlagged && (
-                              <span className="text-[10px] text-purple-400/60 shrink-0 flex items-center gap-1">
-                                <Sparkles className="h-2.5 w-2.5" /> AI
+                              <span className="text-sm text-purple-400/60 shrink-0 flex items-center gap-1">
+                                AI
                               </span>
                             )}
                           </div>
@@ -999,7 +952,7 @@ export function ValidationDashboard() {
                 <div className="rounded-2xl border border-purple-400/25 bg-purple-400/5 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-sm font-medium text-purple-400 flex items-center gap-2">
-                      <Sparkles className="h-4 w-4" /> AI Check
+                      AI review
                     </p>
                     {result.ai && <span className="text-xs text-white/30 font-mono">{result.ai.processing_ms}ms · {result.ai.model?.split("/").pop()}</span>}
                   </div>
@@ -1029,7 +982,7 @@ export function ValidationDashboard() {
                       {/* Anomaly score */}
                       <div className="flex items-center gap-3 bg-white/[0.03] rounded-xl p-3">
                         <div className="flex-1">
-                          <p className="text-[10px] text-white/30 mb-1.5 uppercase tracking-widest">AI Anomaly Score</p>
+                          <p className="mb-1.5 text-sm text-white/60">AI anomaly score</p>
                           <div className="h-2 rounded-full bg-white/[0.06] overflow-hidden">
                             <div className="h-full rounded-full transition-all duration-700"
                               style={{
@@ -1042,14 +995,14 @@ export function ValidationDashboard() {
                           <p className="font-mono text-2xl font-semibold text-white">
                             {Math.round((result.ai.anomaly_score ?? 0) * 100)}%
                           </p>
-                          <p className="text-[10px] text-white/30">anomaly</p>
+                          <p className="text-sm text-white/30">anomaly</p>
                         </div>
                       </div>
 
                       {/* Overall assessment */}
                       {result.ai.dataset_summary && (
                         <div className="bg-white/[0.03] rounded-xl p-4 border border-purple-400/10">
-                          <p className="text-[10px] uppercase tracking-widest text-purple-400/60 mb-2">Expert Assessment</p>
+                          <p className="text-sm text-purple-400/60 mb-2">Expert Assessment</p>
                           <p className="text-sm text-white/60 leading-relaxed">{result.ai.dataset_summary}</p>
                         </div>
                       )}
@@ -1057,13 +1010,13 @@ export function ValidationDashboard() {
                       {/* Corruption probability distribution — only present when the full orchestrator ran */}
                       {result.ai.corruption_probability && Object.keys(result.ai.corruption_probability).length > 0 && (
                         <div className="bg-white/[0.03] rounded-xl p-4 border border-purple-400/10">
-                          <p className="text-[10px] uppercase tracking-widest text-purple-400/60 mb-3">Corruption probability distribution</p>
+                          <p className="text-sm text-purple-400/60 mb-3">Corruption probability distribution</p>
                           <div className="space-y-2">
                             {Object.entries(result.ai.corruption_probability)
                               .sort(([, a], [, b]) => b - a)
                               .map(([label, prob]) => (
                                 <div key={label}>
-                                  <div className="flex items-center justify-between text-xs text-white/50 mb-1">
+                                  <div className="flex items-center justify-between text-sm text-white/65 mb-1">
                                     <span className="capitalize">{label.replace(/_/g, " ")}</span>
                                     <span className="font-mono">{Math.round(prob * 100)}%</span>
                                   </div>
@@ -1082,8 +1035,8 @@ export function ValidationDashboard() {
                       {/* What only AI can see — the most compelling demonstration of value */}
                       {result.ai.what_only_ai_sees && (
                         <div className="rounded-xl border border-purple-400/25 bg-purple-400/[0.08] p-4">
-                          <p className="text-[10px] uppercase tracking-widest text-purple-400 mb-2 flex items-center gap-1.5">
-                            <Sparkles className="h-3 w-3" /> What only AI can see
+                          <p className="text-sm text-purple-400 mb-2 flex items-center gap-1.5">
+                            What only AI can see
                           </p>
                           <p className="text-sm text-white/70 leading-relaxed">{result.ai.what_only_ai_sees}</p>
                         </div>
@@ -1092,16 +1045,16 @@ export function ValidationDashboard() {
                       {/* Root causes — collapsed individual issues into diagnoses */}
                       {result.ai.root_causes && result.ai.root_causes.length > 0 && (
                         <div className="space-y-2">
-                          <p className="text-[10px] uppercase tracking-widest text-white/30">Root causes</p>
+                          <p className="text-sm text-white/30">Root causes</p>
                           {result.ai.root_causes.map((rc, i) => (
                             <div key={i} className="rounded-xl border border-red-400/15 bg-red-400/5 p-3">
                               <div className="flex items-center justify-between gap-2 mb-1">
                                 <span className="text-xs font-medium text-white/75">{rc.name}</span>
-                                <span className="text-[10px] text-white/25 shrink-0">{Math.round(rc.confidence * 100)}% conf</span>
+                                <span className="text-sm text-white/55 shrink-0">{Math.round(rc.confidence * 100)}% conf</span>
                               </div>
                               <p className="text-xs text-white/45 leading-relaxed">{rc.evidence}</p>
                               {rc.affected_columns && rc.affected_columns.length > 0 && (
-                                <p className="mt-1 text-[10px] font-mono text-white/25">
+                                <p className="mt-1 text-sm font-mono text-white/25">
                                   columns: {rc.affected_columns.join(", ")}
                                 </p>
                               )}
@@ -1115,14 +1068,14 @@ export function ValidationDashboard() {
                         <div className="grid gap-2 sm:grid-cols-2">
                           {result.ai.physics_agreement && (
                             <div className="rounded-xl bg-pass/5 border border-pass/15 p-3">
-                              <p className="text-[10px] uppercase tracking-widest text-pass/70 mb-1.5">Confirms physics findings</p>
-                              <p className="text-xs text-white/50 leading-relaxed">{result.ai.physics_agreement}</p>
+                              <p className="text-sm text-pass/70 mb-1.5">Confirms physics findings</p>
+                              <p className="text-sm text-white/65 leading-relaxed">{result.ai.physics_agreement}</p>
                             </div>
                           )}
                           {result.ai.physics_gaps && (
                             <div className="rounded-xl bg-amber-400/5 border border-amber-400/15 p-3">
-                              <p className="text-[10px] uppercase tracking-widest text-amber-400/70 mb-1.5">What physics engine missed</p>
-                              <p className="text-xs text-white/50 leading-relaxed">{result.ai.physics_gaps}</p>
+                              <p className="text-sm text-amber-400/70 mb-1.5">What physics engine missed</p>
+                              <p className="text-sm text-white/65 leading-relaxed">{result.ai.physics_gaps}</p>
                             </div>
                           )}
                         </div>
@@ -1131,7 +1084,7 @@ export function ValidationDashboard() {
                       {/* AI findings */}
                       {(result.ai.findings ?? []).length > 0 && (
                         <div className="space-y-2">
-                          <p className="text-[10px] uppercase tracking-widest text-white/30">
+                          <p className="text-sm text-white/30">
                             AI Findings ({result.ai.findings?.length})
                           </p>
                           {(result.ai.findings ?? []).map((f, i) => {
@@ -1148,13 +1101,13 @@ export function ValidationDashboard() {
                                       {f.severity === "critical" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ"}
                                     </span>
                                     <span className="text-xs font-medium text-white/75">{f.title}</span>
-                                    <span className={cn("text-[10px] font-mono", srcColor)}>{srcBadge}</span>
+                                    <span className={cn("text-sm font-mono", srcColor)}>{srcBadge}</span>
                                   </div>
-                                  <span className="text-[10px] text-white/25 shrink-0">{Math.round(f.confidence * 100)}% conf</span>
+                                  <span className="text-sm text-white/55 shrink-0">{Math.round(f.confidence * 100)}% conf</span>
                                 </div>
                                 <p className="text-xs text-white/45 leading-relaxed pl-4">{f.detail}</p>
                                 {f.trials && f.trials.length > 0 && (
-                                  <p className="mt-1 text-[10px] font-mono text-white/25 pl-4">
+                                  <p className="mt-1 text-sm font-mono text-white/25 pl-4">
                                     Trials: {f.trials.slice(0,5).map(t => `#${t}`).join(", ")}{f.trials.length > 5 ? "…" : ""}
                                   </p>
                                 )}
@@ -1167,7 +1120,7 @@ export function ValidationDashboard() {
                       {/* Recommendations */}
                       {(result.ai.recommendations ?? []).length > 0 && (
                         <div className="space-y-2">
-                          <p className="text-[10px] uppercase tracking-widest text-white/30">Recommendations</p>
+                          <p className="text-sm text-white/30">Recommendations</p>
                           {(result.ai.recommendations ?? []).map((r, i) => (
                             <div key={i} className="flex gap-2 text-xs text-white/45">
                               <span className="text-accent-cyan shrink-0">→</span>
@@ -1180,12 +1133,12 @@ export function ValidationDashboard() {
                       {/* Phase timings — collapsed debug info */}
                       {result.ai.phase_timings && Object.keys(result.ai.phase_timings).length > 0 && (
                         <details className="rounded-xl border border-white/[0.06] bg-black/20 p-3">
-                          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-white/30 flex items-center gap-1.5">
+                          <summary className="cursor-pointer text-sm text-white/30 flex items-center gap-1.5">
                             <Timer className="h-3 w-3" /> Debug: orchestrator phase timings
                           </summary>
                           <div className="mt-2 space-y-1">
                             {Object.entries(result.ai.phase_timings).map(([phase, ms]) => (
-                              <div key={phase} className="flex justify-between text-[11px] font-mono text-white/40">
+                              <div key={phase} className="flex justify-between text-xs font-mono text-white/40">
                                 <span>{phase.replace(/_/g, " ")}</span>
                                 <span>{ms}ms</span>
                               </div>
@@ -1207,7 +1160,7 @@ export function ValidationDashboard() {
                 <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5">
                   <button onClick={() => setShowStats(v => !v)}
                     className="flex items-center justify-between w-full">
-                    <p className="text-xs uppercase tracking-widest text-white/30">
+                    <p className="text-xs text-white/30">
                       Column Statistics — {result.trials_valid} valid trials
                     </p>
                     {showStats ? <ChevronUp className="h-4 w-4 text-white/25" /> : <ChevronDown className="h-4 w-4 text-white/25" />}
@@ -1216,11 +1169,11 @@ export function ValidationDashboard() {
                     <div className="mt-4 grid gap-2 sm:grid-cols-2">
                       {Object.entries(result.statistics ?? {}).map(([col, s]) => (
                         <div key={col} className="rounded-xl bg-white/[0.02] border border-white/[0.05] p-3">
-                          <p className="font-mono text-[10px] text-accent-cyan mb-2">{col}</p>
+                          <p className="font-mono text-sm text-accent-cyan mb-2">{col}</p>
                           <div className="space-y-0.5">
                             {([["mean", s.mean], ["std", s.std], ["p5–p95", `${fmtN(s.p5)} – ${fmtN(s.p95)}`], ["n valid", s.n], ["cv", s.cv]] as [string, number|string][])
                               .map(([k, v]) => (
-                              <div key={k} className="flex justify-between text-[10px]">
+                              <div key={k} className="flex justify-between text-sm">
                                 <span className="text-white/25">{k}</span>
                                 <span className="font-mono text-white/55">{typeof v === "number" ? fmtN(v) : v}</span>
                               </div>

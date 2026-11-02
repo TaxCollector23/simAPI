@@ -1,34 +1,23 @@
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
-import { Reveal } from "./ui/reveal";
+import { ArrowUpRight } from "lucide-react";
 
 export function Cta() {
   return (
-    <section className="relative py-20 sm:py-28">
-      <div className="container-tight">
-        <Reveal>
-          <div className="relative overflow-hidden rounded-lg border border-white/[0.08] bg-ink-900/60 px-8 py-16 text-center">
-            <div className="pointer-events-none absolute inset-0 grid-bg opacity-40" />
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-radial-fade" />
-            <div className="relative">
-              <h2 className="mx-auto max-w-2xl text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
-                Put a quality gate in front of every simulation run.
-              </h2>
-              <p className="mx-auto mt-4 max-w-xl text-white/55">
-                Generate a key, validate a sample run in the browser, then move the same
-                checks into your CLI, SDK, or CI pipeline.
-              </p>
-              <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-                <Link href="/dashboard" className="btn-accent">
-                  Get API Key <ArrowRight className="h-4 w-4" />
-                </Link>
-                <Link href="/docs" className="btn-ghost">
-                  Read docs
-                </Link>
-              </div>
-            </div>
-          </div>
-        </Reveal>
+    <section className="py-20 sm:py-28">
+      <div className="container-tight grid gap-8 lg:grid-cols-[1fr_auto] lg:items-end">
+        <div>
+          <p className="text-sm font-medium text-accent-cyan">Next step</p>
+          <h2 className="mt-4 max-w-2xl text-balance text-3xl font-medium leading-tight text-white sm:text-4xl">
+            Put a physics check between simulation and the next decision
+          </h2>
+          <p className="mt-4 max-w-xl text-base leading-7 text-white/65">
+            Try a run in the browser, then use the CLI or SDK when you are ready to make validation part of your pipeline.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/play" className="btn-accent">Open playground <ArrowUpRight className="h-4 w-4" /></Link>
+          <Link href="/docs" className="btn-ghost">Read the docs</Link>
+        </div>
       </div>
     </section>
   );

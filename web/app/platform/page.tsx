@@ -6,7 +6,7 @@ import { Cta } from "@/components/cta";
 export const metadata: Metadata = {
   title: "Platform",
   description:
-    "The SimAPI validation platform: deterministic physics checks, AI-assisted review, regression detection, CI/CD integration, and more.",
+    "How SimAPI takes simulation output through checks, evidence review, and a pipeline gate.",
 };
 
 export default function PlatformPage() {

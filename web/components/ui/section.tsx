@@ -1,13 +1,12 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { Reveal } from "./reveal";
 
-/** A titled page section with an eyebrow, heading, and lede. */
+/** A consistent heading and supporting copy for page sections. */
 export function SectionHeader({
   eyebrow,
   title,
   lede,
-  align = "center",
+  align = "left",
 }: {
   eyebrow?: string;
   title: ReactNode;
@@ -15,18 +14,18 @@ export function SectionHeader({
   align?: "center" | "left";
 }) {
   return (
-    <Reveal
+    <div
       className={cn(
         "flex w-full flex-col gap-4",
         align === "center" ? "items-center text-center" : "items-start text-left",
       )}
     >
       {eyebrow && <span className="eyebrow">{eyebrow}</span>}
-      <h2 className="w-full max-w-2xl text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+      <h2 className="w-full max-w-2xl text-balance text-3xl font-medium tracking-tight text-white sm:text-4xl">
         {title}
       </h2>
-      {lede && <p className="w-full max-w-2xl text-base leading-relaxed text-white/55">{lede}</p>}
-    </Reveal>
+      {lede && <p className="w-full max-w-2xl text-base leading-relaxed text-white/65">{lede}</p>}
+    </div>
   );
 }
 

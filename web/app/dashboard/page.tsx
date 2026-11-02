@@ -3,7 +3,7 @@ import { DashboardApp } from "@/components/dashboard-app";
 
 export const metadata: Metadata = {
   title: "Dashboard",
-  description: "Manage API keys, view usage, and run simulation validations.",
+  description: "Review simulation validations and browser-local run history.",
   robots: { index: false, follow: false },
 };
 

@@ -11,7 +11,7 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", displ
 export const metadata: Metadata = {
   metadataBase: new URL(site.url),
   title: {
-    default: `${site.name} — ${site.tagline}`,
+    default: `${site.name}: ${site.tagline}`,
     template: `%s — ${site.name}`,
   },
   description: site.description,
@@ -20,31 +20,31 @@ export const metadata: Metadata = {
     "CFD validation",
     "FEA validation",
     "physics validation API",
-    "engineering simulation CI/CD",
+    "Physical AI simulation validation",
     "multiphysics",
-    "robotics simulation",
+    "robotics simulation validation",
     "ML dataset validation",
   ],
   authors: [{ name: "SimAPI" }],
   openGraph: {
     type: "website",
     url: site.url,
-    title: `${site.name} — ${site.tagline}`,
+    title: `${site.name}: ${site.tagline}`,
     description: site.description,
     siteName: site.name,
   },
   twitter: {
     card: "summary_large_image",
-    title: `${site.name} — ${site.tagline}`,
+    title: `${site.name}: ${site.tagline}`,
     description: site.description,
   },
   robots: { index: true, follow: true },
   alternates: { canonical: site.url },
-  icons: { icon: "/hero.svg", shortcut: "/hero.svg", apple: "/hero.svg" },
+  icons: { icon: "/icon.svg", shortcut: "/icon.svg" },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#06070a",
+  themeColor: "#101619",
   colorScheme: "dark",
 };
 
@@ -55,7 +55,6 @@ const jsonLd = {
   applicationCategory: "DeveloperApplication",
   operatingSystem: "Any",
   description: site.description,
-  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

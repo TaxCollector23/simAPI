@@ -41,7 +41,7 @@ export default function SecurityPage() {
           ))}
         </div>
         <div className="mt-8 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-6 text-sm text-white/55">
-          <p><strong className="text-white/80">Reporting a vulnerability.</strong> Email <a className="text-accent-cyan" href="mailto:security@sim-api.dev">security@sim-api.dev</a> or open a private advisory on the <a className="text-accent-cyan" href="https://github.com/TaxCollector23/SimAPI-YC-/security">GitHub repo</a>. We aim to acknowledge within one business day. SOC 2 Type II is on the roadmap for Enterprise.</p>
+          <p><strong className="text-white/80">Reporting a vulnerability.</strong> Email <a className="text-accent-cyan" href="mailto:security@sim-api.dev">security@sim-api.dev</a> or open a private advisory on the <a className="text-accent-cyan" href="https://github.com/TaxCollector23/simAPI/security">GitHub repo</a>. We aim to acknowledge within one business day. SOC 2 Type II is on the roadmap for Enterprise.</p>
         </div>
       </section>
       <Cta />

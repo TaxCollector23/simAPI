@@ -1,15 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  LayoutDashboard, KeyRound, Activity, FlaskConical, BookOpen, Settings as SettingsIcon,
-  Copy, Check, Trash2, Plus, ExternalLink, Loader2, BarChart3, ScrollText, Radar,
+  LayoutDashboard, Activity, FlaskConical, BookOpen, Settings as SettingsIcon,
+  Trash2, ExternalLink, BarChart3, ScrollText, Radar,
 } from "lucide-react";
-import {
-  listKeys, createKey, revokeKey,
-  type ApiKeyRecord,
-} from "@/lib/dashboard-store";
 import {
   usageStats, listRuns as listRunHistory,
   type UsageStats, type RunRecord,
@@ -21,7 +17,7 @@ import { RequestInspectorPanel } from "./request-inspector-panel";
 import { cn } from "@/lib/utils";
 import { site } from "@/lib/site";
 
-type Section = "overview" | "keys" | "usage" | "analytics" | "logs" | "inspector" | "run" | "settings";
+type Section = "overview" | "usage" | "analytics" | "logs" | "inspector" | "run" | "settings";
 
 const NAV: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -29,7 +25,6 @@ const NAV: { id: Section; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "logs", label: "Logs", icon: ScrollText },
   { id: "inspector", label: "Request Inspector", icon: Radar },
   { id: "usage", label: "Usage", icon: Activity },
-  { id: "keys", label: "API Keys", icon: KeyRound },
   { id: "run", label: "Playground", icon: FlaskConical },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
@@ -44,18 +39,18 @@ export function DashboardApp() {
   }
 
   return (
-    <div className="container-tight pt-28 pb-24">
-      <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
+    <div className="container-tight pb-24 pt-32">
+      <div className="grid gap-8 lg:grid-cols-[240px_1fr]">
         {/* Sidebar */}
         <aside className="lg:sticky lg:top-24 lg:self-start">
-          <p className="px-3 text-xs font-semibold uppercase tracking-wider text-white/35">Dashboard</p>
+          <p className="px-3 text-sm font-medium text-white/55">Workspace</p>
           <nav className="mt-3 space-y-0.5">
             {NAV.map((item) => (
               <button
                 key={item.id}
                 onClick={() => setSection(item.id)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition-colors",
+                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm transition-colors",
                   section === item.id ? "bg-white/[0.06] text-white" : "text-white/55 hover:bg-white/[0.03] hover:text-white",
                 )}
               >
@@ -79,7 +74,6 @@ export function DashboardApp() {
           {section === "inspector" && (
             <RequestInspectorPanel runId={inspectRunId} onBack={() => setInspectRunId(null)} />
           )}
-          {section === "keys" && <ApiKeys />}
           {section === "usage" && <Usage />}
           {section === "run" && <RunSimulation />}
           {section === "settings" && <SettingsPanel />}
@@ -92,11 +86,9 @@ export function DashboardApp() {
 // ── Overview ──────────────────────────────────────────────────────────────────
 function Overview({ onNavigate }: { onNavigate: (s: Section) => void }) {
   const [stats, setStats] = useState<UsageStats | null>(null);
-  const [hasKey, setHasKey] = useState(false);
 
   useEffect(() => {
     setStats(usageStats());
-    setHasKey(listKeys().length > 0);
   }, []);
 
   if (!stats) return null;
@@ -105,7 +97,7 @@ function Overview({ onNavigate }: { onNavigate: (s: Section) => void }) {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-white">Overview</h1>
-        <p className="mt-1 text-sm text-white/50">Here&apos;s your validation activity.</p>
+        <p className="mt-1 text-sm text-white/60">Validations saved in this browser.</p>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -114,35 +106,23 @@ function Overview({ onNavigate }: { onNavigate: (s: Section) => void }) {
         <Stat label="Pass rate" value={stats.totalValidations ? `${stats.successRate}%` : "—"} />
       </div>
 
-      {!hasKey && (
-        <div className="flex flex-col items-start gap-3 rounded-2xl border border-accent-blue/30 bg-accent-blue/[0.05] p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium text-white">Generate an API key (optional)</p>
-            <p className="text-xs text-white/50">The API is open by default — no key required. Generate one if you're running your own gated deployment.</p>
-          </div>
-          <button onClick={() => onNavigate("keys")} className="btn-accent shrink-0">
-            <Plus className="h-4 w-4" /> Create API key
-          </button>
-        </div>
-      )}
-
       <div>
-        <h2 className="text-base font-semibold text-white">Quickstart — Run the simulations in your browser</h2>
+        <h2 className="text-lg font-medium text-white">Validate a simulation run</h2>
         <p className="mt-1 text-sm text-white/50">
-          No install needed. Configure conditions and validate right here.
+          Choose a domain, adjust conditions, and inspect the checks here.
         </p>
         <button onClick={() => onNavigate("run")} className="btn-accent mt-4">
-          <FlaskConical className="h-4 w-4" /> Run simulation in browser
+          <FlaskConical className="h-4 w-4" /> Open validator
         </button>
 
-        <p className="mb-3 mt-8 text-sm text-white/50">or, use the CLI</p>
+        <p className="mb-3 mt-8 text-sm text-white/60">Or call SimAPI from Python</p>
         <div className="card overflow-hidden">
           <div className="border-b border-white/[0.06] px-4 py-2 font-mono text-xs text-white/40">python</div>
           <pre className="overflow-x-auto p-4 font-mono text-[13px] leading-relaxed text-white/70">
 {`from simapi import SimAPI
 
 client = SimAPI(api_key="sk_live_...")
-result = client.validate("simulation.json", simulation_type="aerodynamics")
+result = client.validate("simulation.json", simulation_type="robotics")
 
 print(result.status)          # "passed" | "warning" | "failed"
 print(result.violations)`}
@@ -157,9 +137,9 @@ print(result.violations)`}
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border border-white/[0.07] bg-ink-900/50 p-5">
-      <p className="text-xs text-white/45">{label}</p>
-      <p className="mt-2 text-3xl font-semibold text-white">{value}</p>
+    <div className="rounded-xl border border-white/10 bg-ink-900 p-5">
+      <p className="text-sm text-white/60">{label}</p>
+      <p className="mt-2 font-mono text-3xl font-medium text-white tabular-nums">{value}</p>
     </div>
   );
 }
@@ -211,118 +191,7 @@ function StatusPill({ status }: { status: string }) {
     warning: "bg-warn/15 text-warn",
     failed: "bg-fail/15 text-fail",
   };
-  return <span className={cn("rounded-full px-2 py-0.5 text-xs", map[status])}>{status}</span>;
-}
-
-// ── API Keys ──────────────────────────────────────────────────────────────────
-function ApiKeys() {
-  const [keys, setKeys] = useState<ApiKeyRecord[]>([]);
-  const [newName, setNewName] = useState("");
-  const [revealed, setRevealed] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [creating, setCreating] = useState(false);
-
-  const refresh = useCallback(() => {
-    setKeys(listKeys());
-  }, []);
-  useEffect(refresh, [refresh]);
-
-  async function create() {
-    setCreating(true);
-    const { raw } = await createKey(newName);
-    setRevealed(raw);
-    setNewName("");
-    setCreating(false);
-    refresh();
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-white">API Keys</h1>
-        <p className="mt-1 text-sm text-white/50">The API is open by default — no key required. Keys here are only useful if you're running your own gated deployment.</p>
-      </div>
-
-      {revealed && (
-        <div className="rounded-2xl border border-pass/30 bg-pass/[0.05] p-5">
-          <p className="text-sm font-medium text-white">Copy your API key now</p>
-          <p className="text-xs text-white/50">This is the only time it will be shown. We store only a hash.</p>
-          <div className="mt-3 flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg border border-white/10 bg-black/40 px-3 py-2.5 font-mono text-sm text-white/80">
-              {revealed}
-            </code>
-            <button
-              onClick={() => {
-                navigator.clipboard.writeText(revealed);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-              className="btn-ghost shrink-0"
-            >
-              {copied ? <Check className="h-4 w-4 text-pass" /> : <Copy className="h-4 w-4" />} {copied ? "Copied" : "Copy"}
-            </button>
-          </div>
-          <button onClick={() => setRevealed(null)} className="mt-3 text-xs text-white/45 hover:text-white">
-            I&apos;ve saved it — dismiss
-          </button>
-        </div>
-      )}
-
-      <div className="card p-5">
-        <label className="mb-1.5 block text-xs font-medium text-white/55">Create a new key</label>
-        <div className="flex gap-2">
-          <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Key name (e.g. production, ci)"
-            className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2.5 text-sm text-white/80 outline-none placeholder:text-white/25 focus:border-accent-blue/50"
-          />
-          <button onClick={create} disabled={creating} className="btn-accent shrink-0">
-            {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Create
-          </button>
-        </div>
-      </div>
-
-      <div className="overflow-hidden rounded-2xl border border-white/[0.07]">
-        {keys.length === 0 ? (
-          <p className="py-10 text-center text-sm text-white/35">No keys yet. Create one above.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.07] bg-white/[0.02] text-left text-xs text-white/45">
-                <th className="p-3 font-medium">Name</th>
-                <th className="p-3 font-medium">Key</th>
-                <th className="p-3 font-medium">Created</th>
-                <th className="p-3 font-medium">Last used</th>
-                <th className="p-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {keys.map((k) => (
-                <tr key={k.id} className="border-b border-white/[0.05] last:border-0">
-                  <td className="p-3 text-white/70">{k.name}</td>
-                  <td className="p-3 font-mono text-xs text-white/50">{k.prefix}</td>
-                  <td className="p-3 text-white/40">{new Date(k.createdAt).toLocaleDateString()}</td>
-                  <td className="p-3 text-white/40">{k.lastUsed ? timeAgo(k.lastUsed) : "never"}</td>
-                  <td className="p-3 text-right">
-                    <button
-                      onClick={() => {
-                        revokeKey(k.id); refresh();
-                      }}
-                      className="rounded-lg p-2 text-white/30 hover:bg-white/5 hover:text-fail"
-                      aria-label="Revoke key"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
+  return <span className={cn("text-sm font-medium", map[status])}>{status}</span>;
 }
 
 // ── Usage ─────────────────────────────────────────────────────────────────────
@@ -364,13 +233,12 @@ function SettingsPanel() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-white">Settings</h1>
-        <p className="mt-1 text-sm text-white/50">No account required — this dashboard runs entirely against your browser&apos;s local storage.</p>
+        <p className="mt-1 text-sm text-white/60">Run history in this dashboard is stored in this browser.</p>
       </div>
 
       <div className="card p-5">
         <h2 className="mb-4 text-sm font-semibold text-white">Local data</h2>
         <dl className="space-y-3 text-sm">
-          <Row label="API keys stored" value={String(listKeys().length)} />
           <Row label="Validation runs stored" value={String(listRunHistory().length)} />
           <Row label="Storage" value="Browser localStorage (this device only)" />
         </dl>
@@ -378,12 +246,11 @@ function SettingsPanel() {
 
       <div className="card p-5">
         <h2 className="mb-1 text-sm font-semibold text-white">Danger zone</h2>
-        <p className="mb-4 text-xs text-white/45">Clears keys and validation history stored in this browser.</p>
+        <p className="mb-4 text-sm text-white/55">Clears validation history stored in this browser.</p>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => {
-              if (confirm("Clear all local API keys and validation history?")) {
-                localStorage.removeItem("simapi.keys.local");
+              if (confirm("Clear validation history stored in this browser?")) {
                 localStorage.removeItem("simapi.runs.local");
                 location.reload();
               }

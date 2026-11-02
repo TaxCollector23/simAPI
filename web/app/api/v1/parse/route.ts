@@ -42,7 +42,7 @@ ${text}`;
     const timer = setTimeout(() => controller.abort(), 25_000);
     const res = await fetch(OPENROUTER_URL, {
       method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "HTTP-Referer": "https://sim-api.vercel.app", "X-Title": "SimAPI" },
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", "HTTP-Referer": "https://simapilander.vercel.app", "X-Title": "SimAPI" },
       body: JSON.stringify({ model, max_tokens: 4000, temperature: 0, messages: [{ role: "user", content: prompt }] }),
       signal: controller.signal,
     });

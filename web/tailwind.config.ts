@@ -15,24 +15,23 @@ const config: Config = {
     },
     extend: {
       colors: {
-        // Near-black canvas with a cool blue undertone (infrastructure feel).
         ink: {
-          950: "#06070a",
-          900: "#0a0b10",
-          850: "#0d0f15",
-          800: "#12141c",
-          700: "#191c26",
-          600: "#232633",
+          950: "#101619",
+          900: "#171f22",
+          850: "#1d2629",
+          800: "#253035",
+          700: "#2f3b40",
+          600: "#3c494d",
         },
         line: "rgba(255,255,255,0.08)",
         accent: {
-          cyan: "#22d3ee",
-          blue: "#3b82f6",
-          violet: "#8b5cf6",
+          cyan: "#d5a266",
+          blue: "#d5a266",
+          violet: "#d5a266",
         },
-        pass: "#34d399",
-        warn: "#fbbf24",
-        fail: "#f87171",
+        pass: "#8db99e",
+        warn: "#d5a266",
+        fail: "#df8a80",
       },
       fontFamily: {
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
@@ -41,39 +40,6 @@ const config: Config = {
       borderRadius: {
         "2xl": "1rem",
         "3xl": "1.5rem",
-      },
-      keyframes: {
-        "fade-up": {
-          "0%": { opacity: "0", transform: "translateY(12px)" },
-          "100%": { opacity: "1", transform: "translateY(0)" },
-        },
-        shimmer: {
-          "100%": { transform: "translateX(100%)" },
-        },
-        "pulse-soft": {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.4" },
-        },
-        float: {
-          "0%, 100%": { transform: "translateY(0)" },
-          "50%": { transform: "translateY(-8px)" },
-        },
-        "grid-pan": {
-          "0%": { backgroundPosition: "0 0" },
-          "100%": { backgroundPosition: "40px 40px" },
-        },
-      },
-      animation: {
-        "fade-up": "fade-up 0.6s cubic-bezier(0.22,1,0.36,1) both",
-        "pulse-soft": "pulse-soft 2.4s ease-in-out infinite",
-        float: "float 6s ease-in-out infinite",
-        "grid-pan": "grid-pan 20s linear infinite",
-      },
-      backgroundImage: {
-        "accent-gradient":
-          "linear-gradient(120deg,#22d3ee 0%,#3b82f6 45%,#8b5cf6 100%)",
-        "radial-fade":
-          "radial-gradient(60% 50% at 50% 0%,rgba(59,130,246,0.18) 0%,transparent 70%)",
       },
     },
   },
