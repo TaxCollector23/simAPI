@@ -115,7 +115,8 @@ export function RoboticsPlaygroundTools({
   const path = samples.map((sample, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(sample.value).toFixed(1)}`).join(" ");
 
   function addLimit() {
-    const signal = signals.find((name) => !limits.some((limit) => limit.signal === name)) ?? "";
+    const available = signals.filter((name) => !limits.some((limit) => limit.signal === name));
+    const signal = available.find((name) => /joint|end_effector|tool|gripper/i.test(name)) ?? available[0] ?? "";
     onLimitsChange([...limits, { signal, min: "", max: "" }]);
   }
 

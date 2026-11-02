@@ -382,7 +382,7 @@ export function ValidationDashboard() {
   }
 
   async function run(demo = false) {
-    if (!serverUp) { setError("API server offline. Run: python launch.py"); return; }
+    if (!serverUp) { setError("The hosted validation service is unavailable. Retry shortly."); return; }
     stopPoll(); setPhase("running"); setError(null); setResult(null); setDimResult(null); setShowAll(false);
     setUnitOverrides({});
     try {
@@ -524,7 +524,7 @@ export function ValidationDashboard() {
             <span className="text-white/55">Dimensional analysis</span>
           ) : result && "engine" in result && (
             <span className="text-white/55">
-              {String((result as Record<string, unknown>).engine) === "python-dimensional" ? "Standard report (dimensional engine)" : "Lite engine (20 checks)"}
+              {result.robotics_summary ? `Manipulation engine · ${result.robotics_summary.engine_version}` : String((result as Record<string, unknown>).engine) === "python-dimensional" ? "Standard report (dimensional engine)" : "Hosted validation engine"}
             </span>
           )}
         </div>
@@ -738,8 +738,8 @@ export function ValidationDashboard() {
           <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 flex gap-3">
             <Info className="h-4 w-4 text-accent-cyan shrink-0 mt-0.5" />
             <div className="text-sm text-white/60 leading-relaxed space-y-1">
-              <p>Physics checks run instantly (~300ms). AI analysis follows in the background and appears automatically.</p>
-              <p>All column names are normalized — send <code className="font-mono text-white/50">Cd</code>, <code className="font-mono text-white/50">cd</code>, or <code className="font-mono text-white/50">drag_coefficient</code>.</p>
+              <p>Limits and trajectory checks run on the hosted service. Optional AI review is separate from the deterministic verdict.</p>
+              <p>{selectedSim.value === "robotics" ? "Use stable joint names and episode IDs. Timestamps are seconds; ranges and tolerances must use the signal’s units." : "Column aliases are normalized before validation."}</p>
             </div>
           </div>
         </div>
@@ -757,7 +757,7 @@ export function ValidationDashboard() {
               <p className="text-xs text-white/20 mt-1.5">
                 {engineMode === "dimensional"
                   ? "Units resolution · Pi-group discovery · anchored constants · results in seconds"
-                  : "Dimensional-analysis engine · AI reasoning · results in seconds"}
+                  : selectedSim.value === "robotics" ? "Joint limits · episode timing · motion consistency" : "Dimensional-analysis engine · AI reasoning"}
               </p>
             </div>
           )}
