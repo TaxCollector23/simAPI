@@ -126,7 +126,7 @@ export function RoboticsPlaygroundTools({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium text-white">Arm limits</h3>
-            <p className="mt-1 text-xs leading-5 text-white/55">Enter ranges from your robot model or controller. SimAPI does not infer safe limits.</p>
+            <p className="mt-1 text-xs leading-5 text-white/55">Enter ranges from your robotics model or controller. SimAPI does not infer safe limits.</p>
           </div>
           <div className="flex items-center gap-4">
             <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-white/60 hover:text-white">

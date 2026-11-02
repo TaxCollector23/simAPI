@@ -67,7 +67,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
         <Nav />
-        <main>{children}</main>
+        <main className="site-page">{children}</main>
         <Footer />
       </body>
     </html>

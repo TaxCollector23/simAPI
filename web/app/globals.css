@@ -121,11 +121,10 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .landing-footer a:hover { color: var(--ink); }
 .landing-footer .landing-footer-bottom { border-color: var(--line); color: var(--ink-muted); }
 
-/* Keep the product workspace on the same paper-and-ink palette as the landing
-   page while preserving the dashboard's existing structure and data views. */
-html:has(.dashboard-theme) { color-scheme: light; }
-body:has(.dashboard-theme) { background: #f6f3ec; color: #24241f; }
-.dashboard-theme {
+/* Keep every product route on the landing page paper-and-ink palette. */
+html:has(.site-page) { color-scheme: light; }
+body:has(.site-page) { background: #f6f3ec; color: #24241f; }
+:is(.site-page, .dashboard-theme) {
   --paper: #f6f3ec;
   --paper-raised: #fbf9f4;
   --paper-soft: #eeeae0;
@@ -138,70 +137,70 @@ body:has(.dashboard-theme) { background: #f6f3ec; color: #24241f; }
   background: var(--paper);
   color: var(--ink);
 }
-.dashboard-theme [class*="text-white/"] { color: var(--ink-secondary) !important; }
-.dashboard-theme [class~="text-white"] { color: var(--ink) !important; }
-.dashboard-theme [class*="border-white"] { border-color: var(--line) !important; }
-.dashboard-theme [class*="bg-ink-950"] { background: var(--paper) !important; }
-.dashboard-theme [class*="bg-ink-900"] { background: var(--paper-raised) !important; }
-.dashboard-theme [class*="bg-ink-850"],
-.dashboard-theme [class*="bg-ink-800"],
-.dashboard-theme [class*="bg-ink-700"] { background: var(--paper-soft) !important; }
-.dashboard-theme [class*="bg-black/"] { background: #f0ede5 !important; }
-.dashboard-theme [class~="bg-white/[0.02]"],
-.dashboard-theme [class~="bg-white/[0.03]"],
-.dashboard-theme [class~="bg-white/[0.05]"],
-.dashboard-theme [class~="bg-white/5"] { background: #f5f2eb !important; }
-.dashboard-theme [class~="bg-white/[0.06]"],
-.dashboard-theme [class~="bg-white/[0.1]"],
-.dashboard-theme [class~="bg-white/10"] { background: var(--paper-soft) !important; }
-.dashboard-theme [class~="bg-white"] { background: #fffdf8 !important; }
-.dashboard-theme [class*="text-accent-cyan"],
-.dashboard-theme [class*="text-accent-blue"],
-.dashboard-theme [class*="text-accent-violet"] { color: var(--amber) !important; }
-.dashboard-theme [class~="bg-accent-cyan"],
-.dashboard-theme [class~="bg-accent-cyan/60"],
-.dashboard-theme [class~="bg-accent-blue"],
-.dashboard-theme [class~="bg-accent-blue/20"],
-.dashboard-theme [class~="bg-accent-blue/25"],
-.dashboard-theme [class~="bg-accent-blue/[0.04]"],
-.dashboard-theme [class~="bg-accent-violet"] { background: #a95624 !important; }
-.dashboard-theme [class~="bg-pass"] { background: #38664d !important; }
-.dashboard-theme [class~="bg-red-400"] { background: #a13c32 !important; }
-.dashboard-theme [class~="bg-amber-400"] { background: #865300 !important; }
-.dashboard-theme [class~="text-pass"] { color: #38664d !important; }
-.dashboard-theme [class~="text-fail"],
-.dashboard-theme [class~="text-red-400"] { color: #a13c32 !important; }
-.dashboard-theme [class~="text-amber-400"] { color: #865300 !important; }
-.dashboard-theme [class~="text-purple-400"] { color: #70523d !important; }
-.dashboard-theme [class~="bg-pass/5"],
-.dashboard-theme [class~="bg-pass/10"],
-.dashboard-theme [class~="bg-pass/15"] { background: #e5eee5 !important; }
-.dashboard-theme [class~="bg-red-400/5"],
-.dashboard-theme [class~="bg-red-400/10"] { background: #f4e7e3 !important; }
-.dashboard-theme [class~="bg-amber-400/5"],
-.dashboard-theme [class~="bg-amber-400/10"] { background: #f3ead8 !important; }
-.dashboard-theme [class~="bg-purple-400/5"],
-.dashboard-theme [class~="bg-purple-400/[0.04]"],
-.dashboard-theme [class~="bg-purple-400/[0.08]"],
-.dashboard-theme [class~="bg-purple-400/70"] { background: #ece8e1 !important; }
-.dashboard-theme [class*="border-pass/"] { border-color: #c6d6c8 !important; }
-.dashboard-theme [class*="border-red-400/"] { border-color: #dfc3bc !important; }
-.dashboard-theme [class*="border-amber-400/"] { border-color: #dfd0ae !important; }
-.dashboard-theme [class*="border-purple-400/"] { border-color: #d8cfc4 !important; }
-.dashboard-theme .btn-primary { background: var(--ink); color: var(--paper); }
-.dashboard-theme .btn-primary:hover { background: #3a3a32; }
-.dashboard-theme .btn-ghost { border-color: var(--line); color: var(--ink-secondary); }
-.dashboard-theme .btn-ghost:hover { background: var(--paper-soft); color: var(--ink); }
-.dashboard-theme .btn-accent { background: var(--ink); color: var(--paper); }
-.dashboard-theme .btn-accent:hover { background: #3a3a32; }
-.dashboard-theme input,
-.dashboard-theme select,
-.dashboard-theme textarea { color: var(--ink); }
-.dashboard-theme input::placeholder,
-.dashboard-theme textarea::placeholder { color: var(--ink-muted); }
-.dashboard-theme option { background: var(--paper-raised); color: var(--ink); }
-.dashboard-theme [class*="hover:bg-white/"]:hover { background: var(--paper-soft) !important; }
-.dashboard-theme [class*="hover:text-white"]:hover { color: var(--ink) !important; }
+:is(.site-page, .dashboard-theme) [class*="text-white/"] { color: var(--ink-secondary) !important; }
+:is(.site-page, .dashboard-theme) [class~="text-white"] { color: var(--ink) !important; }
+:is(.site-page, .dashboard-theme) [class*="border-white"] { border-color: var(--line) !important; }
+:is(.site-page, .dashboard-theme) [class*="bg-ink-950"] { background: var(--paper) !important; }
+:is(.site-page, .dashboard-theme) [class*="bg-ink-900"] { background: var(--paper-raised) !important; }
+:is(.site-page, .dashboard-theme) [class*="bg-ink-850"],
+:is(.site-page, .dashboard-theme) [class*="bg-ink-800"],
+:is(.site-page, .dashboard-theme) [class*="bg-ink-700"] { background: var(--paper-soft) !important; }
+:is(.site-page, .dashboard-theme) [class*="bg-black/"] { background: #f0ede5 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-white/[0.02]"],
+:is(.site-page, .dashboard-theme) [class~="bg-white/[0.03]"],
+:is(.site-page, .dashboard-theme) [class~="bg-white/[0.05]"],
+:is(.site-page, .dashboard-theme) [class~="bg-white/5"] { background: #f5f2eb !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-white/[0.06]"],
+:is(.site-page, .dashboard-theme) [class~="bg-white/[0.1]"],
+:is(.site-page, .dashboard-theme) [class~="bg-white/10"] { background: var(--paper-soft) !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-white"] { background: #fffdf8 !important; }
+:is(.site-page, .dashboard-theme) [class*="text-accent-cyan"],
+:is(.site-page, .dashboard-theme) [class*="text-accent-blue"],
+:is(.site-page, .dashboard-theme) [class*="text-accent-violet"] { color: var(--amber) !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-accent-cyan"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-cyan/60"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-blue"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-blue/20"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-blue/25"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-blue/[0.04]"],
+:is(.site-page, .dashboard-theme) [class~="bg-accent-violet"] { background: #a95624 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-pass"] { background: #38664d !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-red-400"] { background: #a13c32 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-amber-400"] { background: #865300 !important; }
+:is(.site-page, .dashboard-theme) [class~="text-pass"] { color: #38664d !important; }
+:is(.site-page, .dashboard-theme) [class~="text-fail"],
+:is(.site-page, .dashboard-theme) [class~="text-red-400"] { color: #a13c32 !important; }
+:is(.site-page, .dashboard-theme) [class~="text-amber-400"] { color: #865300 !important; }
+:is(.site-page, .dashboard-theme) [class~="text-purple-400"] { color: #70523d !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-pass/5"],
+:is(.site-page, .dashboard-theme) [class~="bg-pass/10"],
+:is(.site-page, .dashboard-theme) [class~="bg-pass/15"] { background: #e5eee5 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-red-400/5"],
+:is(.site-page, .dashboard-theme) [class~="bg-red-400/10"] { background: #f4e7e3 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-amber-400/5"],
+:is(.site-page, .dashboard-theme) [class~="bg-amber-400/10"] { background: #f3ead8 !important; }
+:is(.site-page, .dashboard-theme) [class~="bg-purple-400/5"],
+:is(.site-page, .dashboard-theme) [class~="bg-purple-400/[0.04]"],
+:is(.site-page, .dashboard-theme) [class~="bg-purple-400/[0.08]"],
+:is(.site-page, .dashboard-theme) [class~="bg-purple-400/70"] { background: #ece8e1 !important; }
+:is(.site-page, .dashboard-theme) [class*="border-pass/"] { border-color: #c6d6c8 !important; }
+:is(.site-page, .dashboard-theme) [class*="border-red-400/"] { border-color: #dfc3bc !important; }
+:is(.site-page, .dashboard-theme) [class*="border-amber-400/"] { border-color: #dfd0ae !important; }
+:is(.site-page, .dashboard-theme) [class*="border-purple-400/"] { border-color: #d8cfc4 !important; }
+:is(.site-page, .dashboard-theme) .btn-primary { background: var(--ink); color: var(--paper); }
+:is(.site-page, .dashboard-theme) .btn-primary:hover { background: #3a3a32; }
+:is(.site-page, .dashboard-theme) .btn-ghost { border-color: var(--line); color: var(--ink-secondary); }
+:is(.site-page, .dashboard-theme) .btn-ghost:hover { background: var(--paper-soft); color: var(--ink); }
+:is(.site-page, .dashboard-theme) .btn-accent { background: var(--ink); color: var(--paper); }
+:is(.site-page, .dashboard-theme) .btn-accent:hover { background: #3a3a32; }
+:is(.site-page, .dashboard-theme) input,
+:is(.site-page, .dashboard-theme) select,
+:is(.site-page, .dashboard-theme) textarea { color: var(--ink); }
+:is(.site-page, .dashboard-theme) input::placeholder,
+:is(.site-page, .dashboard-theme) textarea::placeholder { color: var(--ink-muted); }
+:is(.site-page, .dashboard-theme) option { background: var(--paper-raised); color: var(--ink); }
+:is(.site-page, .dashboard-theme) [class*="hover:bg-white/"]:hover { background: var(--paper-soft) !important; }
+:is(.site-page, .dashboard-theme) [class*="hover:text-white"]:hover { color: var(--ink) !important; }
 
 @media (max-width: 900px) {
   .landing-wrap, .landing-nav .landing-nav-inner { width: min(100% - 48px, 720px); }

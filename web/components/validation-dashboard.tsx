@@ -514,12 +514,10 @@ export function ValidationDashboard() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-5">
         <div>
           <h1 className="text-2xl font-medium text-white">{selectedSim.value === "robotics" ? "Manipulation arm validation" : "Simulation validation"}</h1>
-          <p className="mt-2 text-sm text-white/60">{selectedSim.value === "robotics" ? "Inspect joint trajectories and check samples against limits from your robot model." : "Load a sample, set the domain and conditions, then inspect the findings."}</p>
+          <p className="mt-2 text-sm text-white/60">{selectedSim.value === "robotics" ? "Inspect joint trajectories and check samples against limits from your robotics model." : "Load a sample, set the domain and conditions, then inspect the findings."}</p>
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm">
-          <span className={serverUp === null ? "text-white/50" : serverUp ? "text-pass" : "text-fail"}>
-            {serverUp === null ? "Checking..." : serverUp ? "API online" : "API offline"}
-          </span>
+          {serverUp === false && <span className="text-fail">API offline</span>}
           {engineMode === "dimensional" ? (
             <span className="text-white/55">Dimensional analysis</span>
           ) : result && "engine" in result && (

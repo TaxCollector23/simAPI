@@ -12,7 +12,6 @@ export function CodeSection() {
     <section className="py-20 sm:py-28">
       <div className="container-tight">
         <div className="max-w-2xl">
-          <p className="landing-page-kicker">Built for robotics</p>
           <h2 className="mt-3 text-balance text-3xl font-medium sm:text-4xl">Validate the full robotics workflow.</h2>
           <p className="mt-5 text-base leading-7 text-white/65">
             Check trajectories, joint limits, timing, tool readings, and training data with one repeatable validation flow.
