@@ -1,8 +1,6 @@
 <div align="center">
 
-# SimAPI
-
-### Validate simulation data before it reaches AI training or robotics.
+# SimAPI: Simulations you can trust
 
 Simulation CI/CD for Physical AI and robotics. Check simulation data against
 physical laws, catch bad runs, and gate what reaches training or autonomy.
