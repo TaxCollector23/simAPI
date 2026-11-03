@@ -12,7 +12,7 @@ npm run build
 npm install -g .
 ```
 
-The source package is version 1.1.0. A source update does not publish a new npm release. Check the npm version before relying on its commands.
+The source package is version 1.1.3. A source update does not publish a new npm release. Check the npm version before relying on its commands.
 
 ## CLI
 

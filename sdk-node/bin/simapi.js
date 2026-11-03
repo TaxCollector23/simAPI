@@ -17,7 +17,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout, platform, env } from "node:process";
 import { exec } from "node:child_process";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.3";
 const WEB_BASE = env.SIMAPI_WEB_URL || "https://simapilander.vercel.app";
 const API_BASE = env.SIMAPI_BASE_URL || "https://simapilander.vercel.app/api";
 const CONFIG_DIR = env.SIMAPI_CONFIG_DIR || join(homedir(), ".simapi");
