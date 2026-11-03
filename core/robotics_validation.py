@@ -5,6 +5,7 @@ from typing import Any
 
 import pandas as pd
 
+from core.robotics_evidence import build_evidence
 from core.robotics_trajectory import analyze_trajectories
 
 # Broad plausibility guards inherited from the original robotics validator.
@@ -123,4 +124,5 @@ def check_robotics_limits(
         counts[group] = counts.get(group, 0) + 1
     for episode in summary["episodes"]:
         episode["flagged_samples"] = counts.get(episode["episode_id"], 0)
-    return {"checks": checks, "excluded": excluded, "summary": summary}
+    evidence = build_evidence(source, checks, limits, conditions or {}, summary)
+    return {"checks": checks, "excluded": excluded, "summary": summary, "evidence": evidence}

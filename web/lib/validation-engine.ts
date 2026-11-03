@@ -103,6 +103,18 @@ const BOUNDS: Record<SimulationType, Record<string, Bound>> = {
   },
 };
 
+export function roboticsEvidenceLimits(rows: Record<string, unknown>[], configured: Record<string, [number, number]> = {}): Record<string, [number, number]> {
+  const result: Record<string, [number, number]> = {};
+  for (const key of new Set(rows.flatMap((row) => Object.keys(row).map(canonical)))) {
+    if (BOUNDS.robotics[key]) result[key] = BOUNDS.robotics[key];
+    if (key.startsWith("joint")) for (const quantity of ["position", "velocity", "acceleration", "torque"]) {
+      if (key.endsWith(`_${quantity}`)) result[key] = BOUNDS.robotics[`joint_${quantity}`];
+    }
+  }
+  for (const [key, range] of Object.entries(configured)) result[canonical(key)] = range;
+  return result;
+}
+
 // Universal physical-plausibility bounds — quantities that carry a domain-agnostic
 // physical range. Checked for every simulation type in addition to the domain table,
 // so any of these columns present in the data gets validated. (~150 quantities.)
@@ -307,9 +319,11 @@ export function validate(
     }
   }
 
+  // Configured robotics bounds are evaluated once by the declared-limit check below.
+  const configuredRoboticsSignals = new Set(Object.keys(roboticsLimits).map(canonical));
   // 2. Plausibility bounds
   for (const [key, [lo, hi]] of Object.entries(bounds)) {
-    if (!(key in canon)) continue;
+    if (!(key in canon) || (simulationType === "robotics" && configuredRoboticsSignals.has(key))) continue;
     const v = canon[key];
     const ok = v >= lo && v <= hi;
     checks.push({
@@ -354,7 +368,7 @@ export function validate(
           severity: "critical",
         });
         recommendations.push(exists
-          ? `Inspect ${key} against the robot model's declared limits.`
+          ? `Inspect ${key} against the robotics model’s declared limits.`
           : `Include ${key}; a configured robot limit could not be evaluated.`);
       }
     }

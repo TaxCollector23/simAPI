@@ -1,0 +1,1 @@
+The three JointState ROS 1 bags were generated with rosbags 0.11.9 (ROS1_NOETIC typestore), using uncompressed, BZ2, and LZ4 writer modes. They each contain three samples on /joint_states: shoulder (revolute) and slider (prismatic), 0.1 seconds apart. arm.urdf declares their limits. No user data is included.

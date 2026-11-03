@@ -7,13 +7,13 @@ export default function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy Policy"
-      updated="July 2026"
+      updated="November 2026"
       sections={[
-        { heading: "Data we process", body: "SimAPI processes the simulation data you submit solely to return a validation result. On enterprise plans with private deployment, your data never leaves your infrastructure." },
-        { heading: "Retention", body: "Job results are retained transiently to support polling and reports, then evicted on a configurable TTL. You can request deletion at any time." },
-        { heading: "Third parties", body: "The optional AI reasoning layer sends de-identified statistical summaries — never raw proprietary geometry — to the configured model provider. It can be disabled entirely." },
-        { heading: "Security", body: "We use API-key authentication, rate limiting, encrypted transport, and secret scanning. See our security policy for responsible disclosure." },
-        { heading: "Contact", body: "Questions about privacy? Email privacy@simapi.dev." },
+        { heading: "Submitted data", body: "Validation sends the numeric records you submit to the hosted SimAPI API. ROS recordings and URDF files are decoded in the browser or CLI first; the extracted records are used for validation." },
+        { heading: "Browser storage", body: "Saved profiles and validation history are stored in this browser. Clearing site storage removes them. Reports and profiles can be downloaded as files." },
+        { heading: "Optional AI review", body: "The robotics playground runs deterministic checks with AI review disabled. When API or CLI callers enable AI review, statistics and selected sample rows may be sent to the configured model provider." },
+        { heading: "Service logs", body: "The hosting platform may keep request metadata and operational logs. This service does not offer a published retention guarantee or a private deployment plan." },
+        { heading: "Questions", body: "Use the GitHub repository to report product issues. Do not include private datasets, credentials, or personal information in public issues." },
       ]}
     />
   );

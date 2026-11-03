@@ -11,6 +11,7 @@
  * console.log(result.status);
  */
 import { readFile } from "node:fs/promises";
+import type { Evidence } from "../lib/robotics-workflow.js";
 
 export type SimulationType =
   | "aerodynamics"
@@ -36,6 +37,10 @@ export interface ValidationIssue {
 }
 
 export interface ValidationResult {
+  robotics_evidence?: Evidence[];
+  robotics_evidence_total?: number;
+  robotics_evidence_truncated?: boolean;
+  validation_context?: { simulation_type: string; robotics_limits: Record<string, [number, number]>; conditions: Record<string, number> };
   job_id: string;
   status: "passed" | "warning" | "failed";
   confidence: "high" | "medium" | "low";
@@ -92,7 +97,7 @@ export class SimAPI {
   ): Promise<ValidationResult> {
     return this.request<ValidationResult>("/v1/validate", {
       data,
-      simulation_type: options.simulationType ?? "aerodynamics",
+      simulation_type: options.simulationType ?? "robotics",
       conditions: options.conditions ?? {},
       ...(options.roboticsLimits ? { robotics_limits: options.roboticsLimits } : {}),
       ...(options.jobId ? { job_id: options.jobId } : {}),
@@ -152,3 +157,8 @@ export class SimAPI {
 }
 
 export default SimAPI;
+
+// Local robotics utilities share their implementation with the hosted playground.
+export { profileFromUrdf, readRecording, jointStateRow } from "../lib/robotics-import.js";
+export { validateProfile, compareReports, repairPreview, parseCsv, parseCsvDocument, inspectRows, toCsv } from "../lib/robotics-workflow.js";
+export type { Profile, Evidence, RepairPlan, ReportDiff } from "../lib/robotics-workflow.js";

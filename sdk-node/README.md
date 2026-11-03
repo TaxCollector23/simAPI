@@ -1,86 +1,100 @@
-# simapi (Node.js SDK + CLI)
+# SimAPI: Simulations you can trust
 
-Validate simulation results against physical laws from Node.js or the terminal.
-Requires Node 18+.
+Node.js SDK and CLI for hosted robotics validation. Check trajectories, joint limits, timing, and training data from your terminal or application.
 
-## Install
+## Install the current source
 
 ```bash
-npm install simapi-cli          # SDK
-npm install -g simapi-cli       # CLI (`simapi` command)
+git clone https://github.com/TaxCollector23/simAPI.git
+cd simAPI/sdk-node
+npm ci
+npm run build
+npm install -g .
+```
+
+The source package is version 1.1.0. A source update does not publish a new npm release. Check the npm version before relying on its commands.
+
+## CLI
+
+```bash
+simapi init
+simapi profile import arm.urdf --name arm --output arm-profile.json
+simapi profile list
+simapi inspect capture.mcap --topic /joint_states --profile arm
+simapi profile show arm
+simapi import capture.mcap --list-topics
+simapi import capture.mcap --topic /joint_states --profile arm --episode pick --output run.json
+simapi validate run.json --profile arm --no-ai --format github --report report.json --fail-on failed
+simapi compare baseline.json report.json --json --fail-on regression
+simapi repair run.json
+simapi repair run.json --apply --output run.repaired.json
+simapi watch run.json --profile arm --no-ai
+```
+
+`inspect` reports sample/episode counts, valid durations, signal ranges, and missing values locally. `--summary` prints a compact validation report; CI environments use it automatically. Project `simapi.json` settings for `profile` and `fail_on` are honored unless overridden.
+
+`validate` reads CSV, JSON, ROS 1 bags, and ROS 1/2 MCAP. The default domain is robotics; `--type` selects another domain. Named profiles live under `~/.simapi/profiles`; `--profile` accepts a name or JSON path. `SIMAPI_CONFIG_DIR` selects a different local config directory.
+
+`profile import` reads resolved URDF or JSON. URDF imports declared joint position, velocity, and effort bounds. It leaves acceleration limits and continuous position bounds unset. Prismatic effort is force in N; revolute effort is torque in Nm. URDF notes explain missing bounds. Joint names map consistently to signals in recording imports. Import the profile before importing a recording so prismatic effort is identified correctly.
+
+ROS bag supports uncompressed, BZ2, and LZ4 files. MCAP supports ROS 1 (`ros1msg` / `ros1`), ROS 2 (`ros2msg` / `cdr`), and JSON messages, with BZ2, LZ4, and Zstd chunks. ROS 2 SQLite `.db3` bags and IDL-only schemas must be converted first. Multiple topics require `--topic`. Import rejects over 10,000 samples or 100 MB, rather than truncating data. An import is one episode unless assigned another ID with `--episode`; timestamp resets remain visible to validation.
+
+`--format github` writes up to 50 escaped workflow annotations to stderr, while `--json` remains clean JSON on stdout. CSV findings annotate a source line. Other formats identify the episode, sample, and signal in the message. `--fail-on failed` or `--fail-on warning` sets exit code 1 at that threshold. Unexpected errors also return nonzero.
+
+`compare` checks severity changes, episode counts, exclusions, and configuration. `--fail-on regression` returns 1 for new/worsened checks or a worse verdict. Changed or unknown settings are reported explicitly.
+
+`repair` runs locally without an API call. Preview the plan first. It can remove exact repeated timestamped samples, reorder within an episode, and interpolate at most two missing joint/tool values between valid neighbours. It does not bridge episodes, choose between conflicting timestamps, or infer wrapped angles. `--apply` writes a separate `.repaired.json`/`.repaired.csv`; existing files are never overwritten. Revalidate the repaired copy before use.
+
+`--report` writes the complete validation response, including configuration and per-sample evidence. Evidence details are capped at 1,000 with explicit total/truncated fields; check and episode totals cover the entire run.
+
+## GitHub Actions
+
+This workflow installs the source CLI in a separate directory. Pin `ref` to the source revision you have reviewed.
+
+```yaml
+name: Robotics checks
+on: [push, pull_request]
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/checkout@v4
+        with:
+          repository: TaxCollector23/simAPI
+          ref: main
+          path: .simapi-tool
+      - run: npm ci --prefix .simapi-tool/sdk-node
+      - run: node .simapi-tool/sdk-node/bin/simapi.js validate data/run.csv --profile arm-profile.json --no-ai --format github --report report.json --fail-on failed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: robotics-report
+          path: report.json
 ```
 
 ## SDK
 
 ```ts
-import { SimAPI } from "simapi-cli";
+import { SimAPI, profileFromUrdf, readRecording } from 'simapi-cli';
+import { readFile } from 'node:fs/promises';
 
-const client = new SimAPI(process.env.SIMAPI_API_KEY);
-
-const result = await client.validate(rows, {
-  simulationType: "aerodynamics",
-  conditions: { velocity: 15.0 },
+const client = new SimAPI();
+const profile = profileFromUrdf(await readFile('arm.urdf', 'utf8'));
+const recording = await readRecording(new Uint8Array(await readFile('capture.mcap')), 'capture.mcap', {
+  topic: '/joint_states', profile,
 });
-
-if (result.status === "failed") {
-  throw new Error("Simulation rejected");
-}
-
-// Or validate a file directly:
-const r2 = await client.validateFile("simulation.json", { simulationType: "structural" });
+const report = await client.validate(recording.rows, {
+  simulationType: 'robotics', roboticsLimits: profile.robotics_limits,
+  conditions: profile.conditions, runAi: false,
+});
 ```
 
-Configuration falls back to environment variables:
+Profiles, `compareReports`, `repairPreview`, `parseCsv`, and `toCsv` are also exported as local utilities. The browser and CLI use the same helper implementation.
 
-- `SIMAPI_API_KEY` — your key
-- `SIMAPI_BASE_URL` — API base URL (default `https://simapilander.vercel.app/api`)
+The hosted API defaults to `https://simapilander.vercel.app/api`. Use `SIMAPI_BASE_URL` for another service. No local server or account is required by the public endpoint. Optional AI review can transmit statistics and selected sample rows to a model provider; `--no-ai` disables it.
 
-Errors throw `SimAPIError` with `code`, `status`, and `requestId`.
-
-## CLI
-
-```bash
-simapi login                 # paste your key (saved to ~/.simapi/config.json)
-simapi init                  # write a sample simulation.json
-simapi validate simulation.json
-simapi validate run.json --type structural --json
-simapi validate run.csv --fail-on warning   # non-zero exit for CI
-simapi validate arm.csv --profile arm-profile.json --no-ai --report report.json --fail-on failed
-simapi whoami
-simapi logout
-simapi version
-simapi help
-```
-
-`SIMAPI_API_KEY` overrides the saved key, which is convenient in CI.
-
-For robotics trajectories, the CLI reads CSV headers and numeric samples
-directly. CSV input defaults to the robotics domain. A profile is a JSON file
-with the arm's model or controller limits:
-
-```json
-{
-  "robotics_limits": {
-    "joint_1_position": [-1.57, 1.57],
-    "joint_1_velocity": [-2.0, 2.0],
-    "joint_1_torque": [-70.0, 70.0],
-    "joint_1_acceleration": [-5.0, 5.0]
-  },
-  "conditions": {
-    "max_time_step": 0.02,
-    "velocity_tolerance": 0.1
-  }
-}
-```
-
-Keep units consistent with the trajectory data. SimAPI does not infer safe
-limits from observed samples.
-
-## Build (for contributors)
-
-```bash
-npm install
-npm run build     # compiles src/ → dist/
-```
-
-The CLI (`bin/simapi.js`) is plain Node ESM and runs without a build step.
+A passing report describes the checks that ran. It does not certify hardware, policies, or safe execution.

@@ -38,7 +38,7 @@ export function Hero() {
           <p className="hero-context">Robotics validation</p>
           <h1>SimAPI: Simulations you can trust</h1>
           <p className="hero-description">
-            Check robotics data, trajectories, and policies before they reach training or hardware.
+            Check robotics data and trajectories before training or hardware.
           </p>
           <div className="hero-actions">
             <Link href="/play" className="landing-button landing-button-primary">

@@ -886,6 +886,7 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     if req.simulation_type == SimulationType.ROBOTICS:
         robotics = check_robotics_limits(df, req.robotics_limits, source_rows=req.data, conditions=req.conditions)
         result = _merge_robotics_limits(result, robotics)
+        result["validation_context"] = {"simulation_type": "robotics", "robotics_limits": req.robotics_limits, "conditions": req.conditions}
 
     # Legacy check-based engine kept available, non-authoritative: its
     # findings are exposed under `legacy_physics` for comparison/migration
@@ -1016,6 +1017,10 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
     checks = robotics["checks"]
     result["robotics_checks"] = checks
     result["robotics_summary"] = robotics["summary"]
+    evidence = robotics.get("evidence", {"entries": [], "total": 0, "truncated": False})
+    result["robotics_evidence"] = evidence["entries"]
+    result["robotics_evidence_total"] = evidence["total"]
+    result["robotics_evidence_truncated"] = evidence["truncated"]
     passed = sum(check["status"] == "passed" for check in checks)
     failed = sum(check["status"] == "failed" for check in checks)
     warnings = sum(check["status"] == "warning" for check in checks)

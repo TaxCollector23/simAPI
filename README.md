@@ -1,6 +1,6 @@
 # SimAPI: Simulations you can trust
 
-Hosted validation for simulation data used in Physical AI and robotics. Check a
+Hosted validation for robotics data, joint trajectories, and Physical AI workflows. Check a
 run in the browser, from the CLI, or through an SDK. SimAPI is a service to use,
 not software you need to host.
 
@@ -21,7 +21,7 @@ SimAPI is focused on two workflows:
   decide whether a run is suitable for the next step.
 - **Robotics, starting with manipulation arms:** check joint signals, actuator
   outputs, and end-effector measurements. Supply per-signal limits from the
-  robot model or controller configuration so SimAPI can flag samples that leave
+  robotics model or controller configuration so SimAPI can flag samples that leave
   the arm's allowed range.
 
 SimAPI checks data; it does not certify a robot, prove sim-to-real transfer, or
@@ -55,8 +55,7 @@ fails closed because the requested limit could not be checked.
 }
 ```
 
-The ranges must use the same units as the input data. SimAPI does not yet parse
-URDF, ROS bag, or MCAP files; provide numeric records and limits directly.
+The ranges must use the same units as the input data. The CLI and playground can import limits from URDF and extract JointState signals from ROS 1 bags and ROS 1/2 MCAP recordings. The API accepts the resulting numeric records.
 
 ## Trajectory checks
 
@@ -106,6 +105,34 @@ your arm. `simapi validate episode.csv --profile arm-profile.json --no-ai
 --report report.json --fail-on failed` writes a report and returns a failure
 exit code if a blocking check fails, including when `--json` output is used.
 
+## Robotics workflow tools
+
+- **URDF profiles:** import revolute, continuous, and prismatic joint limits. Original joint names map to stable signal names such as `joint_shoulder_position`. Prismatic effort uses `_force` in newtons; revolute effort uses `_torque` in newton metres. No acceleration limit or continuous position bound is invented.
+- **Recording ingestion:** read ROS 1 `.bag` and ROS 1/2 `.mcap` JointState messages, including BZ2/LZ4 ROS bags and BZ2/LZ4/Zstd MCAP chunks. MCAP supports `ros1msg` + ROS 1 serialization, `ros2msg` + CDR, and JSON messages. ROS 2 `.db3` bags and IDL-only schemas require conversion first. Select a topic when multiple channels exist.
+- **Reusable profiles:** save named profiles in the CLI or browser. Download the same JSON profile for the CLI, SDK, or API. Browser storage is local to that browser; profiles are not synchronized to an account.
+- **Trajectory comparison:** view position, velocity, acceleration, and effort on aligned plots, each in its own units. Overlay another episode or CSV/JSON run. Missing samples remain gaps; comparison does not resample or estimate missing values.
+- **Report comparison:** inspect new, resolved, and worsened checks and changed episode counts. Reports include the settings used so a configuration change is visible. Older reports without settings show that comparison coverage as unknown.
+- **CI output:** emit GitHub Actions annotations with episode and sample information. CSV annotations identify the source line. JSON annotations identify the sample in the message. Exit gates also apply to JSON output.
+- **Repair previews:** propose exact duplicate removal when timestamps agree, ordering within an episode, and interpolation of at most two missing joint/tool samples bracketed by valid timestamps and values. Conflicting timestamps and unbounded gaps need manual review. Repairs write a new file and refuse to overwrite an existing file.
+
+```bash
+simapi profile import arm.urdf --name arm --output arm-profile.json
+simapi import capture.mcap --list-topics
+simapi import capture.mcap --topic /joint_states --profile arm --output run.json
+simapi validate run.json --profile arm --no-ai --format github --report report.json --fail-on failed
+simapi compare baseline.json report.json --fail-on regression
+simapi repair run.json
+simapi repair run.json --apply --output run.repaired.json
+```
+
+URDF is imported after Xacro expansion. JointState arrays use the exact joint name to create the profile’s canonical signal names; names that collide after normalization are rejected. Missing optional velocity or effort arrays stay absent. Joint header timestamps are preferred, with recording timestamps as a fallback. Numeric times are seconds. Import assigns one episode by default (`--episode` changes its ID); time resets are reported by validation rather than silently split into new episodes.
+
+A request accepts up to 10,000 samples. Recording import accepts files up to 100 MB and rejects a selected topic over the sample limit instead of truncating it. Export shorter captures or split complete episodes before submission.
+
+Reports add `validation_context` and `robotics_evidence`: episode ID, zero-based sample index, timestamp, signal, observed value, expected range, and check detail. Evidence details are capped at 1,000 entries with explicit `robotics_evidence_total` and `robotics_evidence_truncated` fields; verdicts and episode counts cover the full dataset.
+
+The playground runs deterministic robotics checks with AI review disabled. Recorded data can support a policy review, but SimAPI does not execute policies, simulate collisions, or certify hardware.
+
 ## Use the hosted service
 
 The same hosted endpoint can be called from a browser, a CI job, or an
@@ -121,7 +148,12 @@ inspect its validation report.
 Install the CLI and validate a robotics dataset:
 
 ```bash
-npm install -g simapi-cli
+# Build the current source CLI (new robotics commands are in sdk-node).
+git clone https://github.com/TaxCollector23/simAPI.git
+cd simAPI/sdk-node
+npm ci
+npm run build
+npm install -g .
 simapi validate episode.json --type robotics --fail-on warning
 ```
 

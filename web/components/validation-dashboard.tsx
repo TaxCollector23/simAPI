@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { PreflightPanel } from "./preflight-panel";
 import { HistoryPanel } from "./history-panel";
 import { DimensionalResultPanel } from "./dimensional-result-panel";
+import { RoboticsWorkspace } from "./robotics-workspace";
 import { RoboticsRunReport } from "./robotics-run-report";
 import { RoboticsPlaygroundTools, toRoboticsLimits, type RobotLimitDraft } from "./robotics-playground-tools";
 import { recordRun } from "@/lib/run-history";
@@ -336,10 +337,11 @@ export function ValidationDashboard() {
   const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    if (selectedSim.value === "robotics") return;
     healthCheck().then(setServerUp);
     const t = setInterval(() => healthCheck().then(setServerUp), 6000);
     return () => { clearInterval(t); if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+  }, [selectedSim.value]);
 
   function stopPoll() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
@@ -506,6 +508,8 @@ export function ValidationDashboard() {
 
   const issues = result?.issues ?? [];
   const visible = showAll ? issues : issues.slice(0, 8);
+
+  if (selectedSim.value === "robotics") return <RoboticsWorkspace example={simConfig.example as Record<string, unknown>[]} domains={SIM_TYPES} onOtherDomain={changeSim} />;
 
   return (
     <div className="validator-app">

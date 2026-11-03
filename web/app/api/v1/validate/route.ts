@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import type { SimulationType } from "@/lib/validation-engine";
+import { canonical, roboticsEvidenceLimits, type SimulationType } from "@/lib/validation-engine";
+import { buildEvidence } from "@/lib/robotics-workflow.js";
 import { richValidate } from "@/lib/rich-validate";
 import { aiReview, type AiReview } from "@/lib/ai-review";
 
@@ -269,9 +270,15 @@ export async function POST(req: Request) {
           profile,
         );
 
+  const evidence = simType === "robotics" ? buildEvidence(
+    rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [canonical(key), value]))),
+    result.robotics_checks ?? [], roboticsEvidenceLimits(rows, body.robotics_limits), body.conditions ?? {},
+  ) : null;
   return NextResponse.json(
     {
       ...result,
+      validation_context: { simulation_type: simType, robotics_limits: body.robotics_limits ?? {}, conditions: body.conditions ?? {} },
+      ...(evidence ? { robotics_evidence: evidence.entries, robotics_evidence_total: evidence.total, robotics_evidence_truncated: evidence.truncated } : {}),
       engine: engineSource === "python" ? "python-dimensional" : simType === "robotics" ? "typescript-manipulation-2" : "typescript-20-checks",
       python_backend: engineSource === "python",
       ai: mapAi(review),

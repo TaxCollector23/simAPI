@@ -21,7 +21,7 @@ export const site = {
     ] },
     { title: "Developers", links: [
       { label: "Documentation", href: "/docs" },
-      { label: "API reference", href: "https://simapidocs.github.io" },
+      { label: "API reference", href: "/docs#api" },
       { label: "CLI guide", href: "https://github.com/TaxCollector23/simAPI/tree/main/sdk-node#cli" },
       { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
     ] },

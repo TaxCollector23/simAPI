@@ -7,13 +7,12 @@ export default function TermsPage() {
   return (
     <LegalPage
       title="Terms of Service"
-      updated="July 2026"
+      updated="November 2026"
       sections={[
-        { heading: "Acceptable use", body: "SimAPI is provided for validating engineering simulation data. You agree not to use it to attempt to disrupt the service, reverse-engineer other tenants' data, or exceed your plan's rate limits." },
-        { heading: "Availability", body: "We target high availability but the service is provided as-is on non-enterprise plans. Enterprise agreements include a formal SLA." },
-        { heading: "Validation results", body: "SimAPI provides an automated assessment to support your engineering judgment. It does not replace professional review or regulatory certification." },
-        { heading: "Billing", body: "Paid plans bill monthly based on validation volume. You can cancel at any time; usage is prorated." },
-        { heading: "Contact", body: "Questions about these terms? Email legal@simapi.dev." },
+        { heading: "Service use", body: "SimAPI provides hosted checks for robotics and other engineering datasets. Submit data you are authorized to use and respect the request limits." },
+        { heading: "Availability", body: "The public service is available for evaluation. It has no published uptime guarantee, paid service agreement, or enterprise deployment plan." },
+        { heading: "Validation results", body: "Reports describe the checks that ran on the supplied data and settings. They support engineering review; they do not certify hardware, prove policy performance, or guarantee safe execution." },
+        { heading: "Repairs", body: "Repair previews propose data changes. Review the changes, preserve your original records, and validate any repaired copy before using it." },
       ]}
     />
   );

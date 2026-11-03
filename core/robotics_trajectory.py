@@ -44,7 +44,7 @@ def analyze_trajectories(
     def check(name: str, column: str, bad: list[int], detail: str, evaluated: bool = True) -> None:
         unique = sorted(set(bad))
         status = ("failed" if unique else "passed") if evaluated else "warning"
-        checks.append({"name": name, "column": column, "status": status,
+        checks.append({"name": name, "column": column, "status": status, "indices": unique,
                        "violations": len(unique), "detail": detail if evaluated else "Not evaluated. " + detail, "low": None, "high": None})
         for index in unique:
             excluded.setdefault(index, []).append(detail)

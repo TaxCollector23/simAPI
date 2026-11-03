@@ -4,17 +4,17 @@ const steps = [
   {
     number: "01",
     title: "Submit the run",
-    detail: "Send rows of simulation output with a domain and any known conditions. The browser accepts JSON; the CLI and API fit into scripts and CI.",
+    detail: "Load CSV, JSON, ROS 1 bags, or MCAP recordings. Preview the joint signals and select a topic before validation.",
   },
   {
     number: "02",
-    title: "Check the physics",
-    detail: "The engine checks plausible ranges, dimensional and cross-variable consistency, conservation relationships, and statistical anomalies when the needed fields are present.",
+    title: "Check the motion",
+    detail: "Import limits from URDF or use a saved profile. Check joint ranges, sample timing, derived motion, and agreement between position, velocity, and acceleration.",
   },
   {
     number: "03",
     title: "Inspect the evidence",
-    detail: "Get a status, issues, exclusions, and supporting values. An optional AI review can add context when configured; deterministic findings remain visible on their own.",
+    detail: "Review the episode, sample, timestamp, signal, observed value, and expected range for a finding. Compare reports or preview repairs before exporting a new dataset.",
   },
   {
     number: "04",
@@ -25,7 +25,7 @@ const steps = [
 
 export function Features() {
   return (
-    <section id="features" className="border-b border-white/10 py-20 sm:py-28">
+    <section id="features" className="py-20 sm:py-28">
       <div className="container-tight">
         <SectionHeader
           eyebrow="Platform"

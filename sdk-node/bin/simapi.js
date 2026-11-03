@@ -2,21 +2,22 @@
 /**
  * SimAPI CLI.
  *
- * Zero runtime dependencies (Node 18+ built-ins only). The hosted API is
+ * Node 18+ CLI with local ROS and URDF readers. The hosted API is
  * open by default -- no account or sign-in required. An API key is only
  * relevant if you're running your own deployment with SIMAPI_API_KEYS set.
  *   init · validate · watch · usage ·
  *   api-key {show,set,generate,delete} · config [set] · doctor · version · help
  */
-import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, stat, readdir, unlink } from "node:fs/promises";
 import { watch as fsWatch, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, basename, extname } from "node:path";
+import { validateProfile, parseCsvDocument, inspectRows, toCsv, repairPreview, compareReports, githubAnnotations } from "../lib/robotics-workflow.js";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, platform, env } from "node:process";
 import { exec } from "node:child_process";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const WEB_BASE = env.SIMAPI_WEB_URL || "https://simapilander.vercel.app";
 const API_BASE = env.SIMAPI_BASE_URL || "https://simapilander.vercel.app/api";
 const CONFIG_DIR = env.SIMAPI_CONFIG_DIR || join(homedir(), ".simapi");
@@ -56,7 +57,7 @@ function banner() {
   stdout.write("\n");
   ART.forEach((row) => stdout.write(line(rgb(169, 86, 36, row)) + "\n"));
   const title = `SimAPI CLI v${VERSION}`;
-  const tag = "Simulation checks for robotics and Physical AI.";
+  const tag = "Robotics validation for trajectories and training data.";
   const centerText = (s) => (width >= s.length ? " ".repeat(Math.floor((width - s.length) / 2)) + s : s);
   stdout.write("\n" + centerText(c.bold(c.white(title))) + "\n");
   stdout.write(centerText(c.dim(tag)) + "\n\n");
@@ -97,6 +98,7 @@ async function api(path, { method = "GET", body, key } = {}) {
     method,
     headers: { "Content-Type": "application/json", ...(key ? { "X-API-Key": key } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(60_000),
   });
   const text = await res.text();
   let json;
@@ -117,19 +119,32 @@ async function prompt(question) {
   return answer.trim();
 }
 
+const PROFILES_DIR = join(CONFIG_DIR, "profiles");
+function profilePath(name) {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(name || "")) throw new Error("Profile names use 1–64 letters, digits, underscores, or hyphens.");
+  return join(PROFILES_DIR, `${name}.json`);
+}
+async function loadProfile(name) {
+  if (!name) throw new Error("Provide a profile name or JSON file.");
+  const path = existsSync(name) ? name : profilePath(name);
+  return validateProfile(JSON.parse(await readFile(path, "utf8")));
+}
+async function writeNew(path, content) { await writeFile(path, content, { flag: "wx" }); }
+
 // ── Commands ────────────────────────────────────────────────────────────────────
 const commands = {
   async init() {
     const file = "simapi.json";
     if (existsSync(file)) return fail(`${file} already exists.`);
     const config = {
-      simulation_type: "aerodynamics",
-      conditions: { velocity: 15.0, altitude: 120.0 },
-      files: ["simulation.json"],
+      simulation_type: "robotics",
+      conditions: {},
+      robotics_limits: {},
+      files: ["episode.csv"],
       fail_on: "warning",
     };
     await writeFile(file, JSON.stringify(config, null, 2));
-    ok(`Created ${file} — edit it, then run ${c.cyan("simapi validate simulation.json")}.`);
+    ok(`Created ${file} — edit it, then run ${c.cyan("simapi validate episode.csv")}.`);
   },
 
   async validate(args) {
@@ -169,12 +184,9 @@ const commands = {
     const today = events.filter((e) => e.t >= startDay).length;
     const month = events.filter((e) => e.t >= startMonth).length;
     const avg = events.length ? Math.round(events.reduce((a, e) => a + (e.ms || 0), 0) / events.length) : 0;
-    const cfg = await readConfig();
-    const quota = cfg.plan === "startup" ? 250000 : 5000;
-    stdout.write(`\n  ${c.bold("Usage")} ${c.dim(`(${cfg.plan || "developer"} plan)`)}\n`);
+    stdout.write(`\n  ${c.bold("Local request history")}\n`);
     row("Requests today", String(today));
     row("Requests this month", String(month));
-    row("Remaining quota", `${Math.max(0, quota - month).toLocaleString()} / ${quota.toLocaleString()}`);
     row("Avg validation time", avg ? `${avg}ms` : "—");
     stdout.write("\n");
   },
@@ -300,55 +312,99 @@ const commands = {
 
   async repair(args) {
     const file = args._[0];
-    if (!file) return fail(`Usage: ${c.cyan("simapi repair <file> [--apply]")}`);
-    if (!existsSync(file)) return fail(`File not found: ${file}`);
-    let payload;
-    try {
-      payload = JSON.parse(await readFile(file, "utf8"));
-    } catch (e) {
-      return fail(`Could not read ${file}: ${e.message}`);
-    }
+    if (!file) return fail("Usage: simapi repair <file> [--apply] [--output <new-file>]");
+    const payload = await loadPayload(file, await resolveKey(), args);
     const data = Array.isArray(payload) ? payload : payload.data || payload.trials || [];
-    if (!data.length) return fail("No trial records found in file.");
-    const key = await resolveKey();
-    const apply = !!args.apply;
-    const res = await api("/v1/repair", { method: "POST", body: { data, apply }, key });
-    if (!res.ok) {
-      const err = res.json?.error || {};
-      return fail(`[${err.code || res.status}] ${err.message || "repair failed"}`);
+    const plan = repairPreview(data);
+    if (args.json) stdout.write(JSON.stringify(plan, null, 2) + "\n");
+    else {
+      stdout.write(`\n  Repair preview: ${plan.original_samples} → ${plan.repaired_samples} samples\n`);
+      for (const proposal of plan.proposals) {
+        stdout.write(`  ${proposal.kind}: ${proposal.description} (${proposal.affected_row_count} samples)\n`);
+        for (const ch of proposal.changes.slice(0, 8)) stdout.write(`    sample ${ch.row + 1}, ${ch.column}: ${ch.before} → ${ch.after}\n`);
+      }
+      for (const item of plan.unrepairable) stdout.write(`  Review: ${item.reason}\n`);
+      if (!plan.proposals.length) info("No automatic changes proposed.");
     }
-    const r = res.json;
-    const proposals = r.proposals || [];
-    stdout.write(`\n  ${c.bold("Repair preview")}  ${c.dim(file)}\n`);
-    stdout.write("  " + "─".repeat(46) + "\n");
-    if (!proposals.length) {
-      stdout.write(`  ${c.green("No structural issues found — nothing to repair.")}\n\n`);
+    if (args.apply && plan.proposals.length) {
+      const csv = extname(file).toLowerCase() === ".csv";
+      const output = args.output || file.slice(0, file.length - extname(file).length) + (csv ? ".repaired.csv" : ".repaired.json");
+      await writeNew(output, csv ? toCsv(plan.repaired_data) : JSON.stringify(plan.repaired_data, null, 2) + "\n");
+      if (!args.json) ok(`Wrote ${output}. Review and revalidate before use.`);
+    }
+  },
+
+  async inspect(args) {
+    const file = args._[0]; if (!file) return fail("Usage: simapi inspect <file> [--topic <name>] [--json]");
+    if (args.profile) args.profileData = await loadProfile(args.profile);
+    const payload = await loadPayload(file, await resolveKey(), args);
+    const report = inspectRows(Array.isArray(payload) ? payload : payload.data || payload.trials || []);
+    if (args.json) return stdout.write(JSON.stringify(report, null, 2) + "\n");
+    stdout.write(`\n  ${file}: ${report.samples} samples, ${report.episodes.length} episodes\n`);
+    for (const episode of report.episodes) stdout.write(`  ${episode.episode_id}: ${episode.samples} samples, ${episode.duration_seconds === null ? "duration unavailable" : episode.duration_seconds + "s"}\n`);
+    for (const signal of report.signals) stdout.write(`  ${signal.name}: ${signal.min ?? "unavailable"} to ${signal.max ?? "unavailable"}; ${signal.missing_or_nonnumeric} missing/non-numeric\n`);
+  },
+
+  async import(args) {
+    const file = args._[0]; if (!file) return fail("Usage: simapi import <recording.bag|recording.mcap|data.csv> --output <run.json> [--topic <name>]");
+    let rows, recording;
+    if (/\.(mcap|bag)$/i.test(file)) {
+      const { readRecording } = await import("../lib/robotics-import.js");
+      recording = await readRecording(new Uint8Array(await readFile(file)), file, { topic: args.topic, episode: args.episode, profile: args.profile ? await loadProfile(args.profile) : undefined });
+      if (args["list-topics"] || recording.requires_topic) {
+        if (args.json) stdout.write(JSON.stringify(recording.topics, null, 2) + "\n");
+        else for (const t of recording.topics) stdout.write(`${t.topic}  ${t.schema}  ${t.samples} samples\n`);
+        if (recording.requires_topic && !args["list-topics"]) return fail("Multiple topics found. Select one with --topic.");
+        return;
+      }
+      rows = recording.rows;
+    } else {
+      const payload = await loadPayload(file, await resolveKey(), args); rows = Array.isArray(payload) ? payload : payload.data || payload.trials;
+    }
+    if (!Array.isArray(rows) || !rows.length) return fail("No samples found.");
+    if (!args.output) return fail("--output is required; the source recording is never modified.");
+    await writeNew(args.output, args.output.endsWith(".csv") ? toCsv(rows) : JSON.stringify(rows, null, 2) + "\n");
+    if (!args.json) ok(`Imported ${rows.length} samples${recording?.topic ? ` from ${recording.topic}` : ""} into ${args.output}`);
+  },
+
+  async profile(args) {
+    const [sub, value] = args._;
+    await mkdir(PROFILES_DIR, { recursive: true });
+    if (sub === "list") {
+      const names = (await readdir(PROFILES_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
+      stdout.write(args.json ? JSON.stringify(names) + "\n" : (names.join("\n") || "No saved profiles.") + "\n"); return;
+    }
+    if (sub === "show") { stdout.write(JSON.stringify(await loadProfile(value), null, 2) + "\n"); return; }
+    if (sub === "delete") { await unlink(profilePath(value)); ok(`Deleted profile ${value}`); return; }
+    if (sub === "import") {
+      if (!value) return fail("Usage: simapi profile import <arm.urdf|profile.json> --name <name> [--output <profile.json>]");
+      const text = await readFile(value, "utf8");
+      const profile = /\.urdf$/i.test(value) ? (await import("../lib/robotics-import.js")).profileFromUrdf(text, args.name) : validateProfile(JSON.parse(text));
+      const name = args.name || basename(value, extname(value));
+      const content = JSON.stringify({ ...profile, name }, null, 2) + "\n";
+      // Validate all output paths before writing the named profile.
+      const path = profilePath(name);
+      if (existsSync(path) || (args.output && existsSync(args.output))) return fail("Output/profile already exists. Choose a new name or remove the old profile first.");
+      if (args.output) await writeNew(args.output, content);
+      await writeNew(path, content);
+      ok(`Saved profile ${name}. Use --profile ${name}`);
+      for (const warning of profile.warnings || []) info(warning);
       return;
     }
-    for (const prop of proposals) {
-      stdout.write(`\n  ${c.amber("⚠")} ${c.bold(prop.kind)} ${c.dim(`(${prop.affected_row_count} row(s))`)}\n`);
-      stdout.write(`    ${prop.description}\n`);
-      for (const ch of (prop.changes || []).slice(0, 5)) {
-        stdout.write(`    ${c.dim(`row ${ch.row}`)}  ${ch.column}: ${ch.before} → ${c.green(String(ch.after))}\n`);
-      }
-      if (prop.rows_dropped && prop.rows_dropped.length) {
-        stdout.write(`    ${c.dim("drops rows:")} ${prop.rows_dropped.slice(0, 10).join(", ")}\n`);
-      }
+    return fail("Usage: simapi profile <import|list|show|delete>");
+  },
+
+  async compare(args) {
+    if (args._.length !== 2) return fail("Usage: simapi compare <baseline.json> <current.json> [--json] [--fail-on regression]");
+    const diff = compareReports(JSON.parse(await readFile(args._[0], "utf8")), JSON.parse(await readFile(args._[1], "utf8")));
+    if (args.json) stdout.write(JSON.stringify(diff, null, 2) + "\n");
+    else {
+      stdout.write(`\n  ${diff.status_before} → ${diff.status_after} | excluded samples ${diff.exclusion_delta >= 0 ? "+" : ""}${diff.exclusion_delta}\n`);
+      stdout.write(`  Configuration: ${diff.same_configuration === null ? "unknown in older report" : diff.same_configuration ? "same" : "changed; compare settings before judging regressions"}\n`);
+      for (const [label, entries] of [["New/worse", diff.introduced], ["Resolved/improved", diff.resolved], ["Persisting", diff.persisting]]) for (const item of entries) stdout.write(`  ${label}: ${item.name} (${item.before} → ${item.after})\n`);
+      for (const item of diff.episode_changes) stdout.write(`  Episode ${item.episode_id}: ${item.before?.flagged_samples ?? "absent"} → ${item.after?.flagged_samples ?? "absent"} flagged samples\n`);
     }
-    if (r.unrepairable && r.unrepairable.length) {
-      stdout.write(`\n  ${c.bold("Needs manual review")}\n`);
-      for (const u of r.unrepairable) stdout.write(`    ${c.red("✗")} ${u.reason}\n`);
-    }
-    stdout.write("\n");
-    if (apply && r.repaired_data) {
-      const dot = file.lastIndexOf(".");
-      const outPath = dot > -1 ? `${file.slice(0, dot)}.repaired${file.slice(dot)}` : `${file}.repaired`;
-      const outPayload = Array.isArray(payload) ? r.repaired_data : { ...payload, data: r.repaired_data };
-      await writeFile(outPath, JSON.stringify(outPayload, null, 2));
-      ok(`Repaired data written to ${outPath}`);
-    } else if (!apply && proposals.length) {
-      stdout.write(`  ${c.dim("Run")} ${c.cyan(`simapi repair ${file} --apply`)} ${c.dim("to write a repaired copy.")}\n\n`);
-    }
+    if (args["fail-on"] === "regression" && diff.regressed) process.exitCode = 1;
   },
 
   async explain() {
@@ -397,10 +453,14 @@ const commands = {
 };
 
 async function loadPayload(file, key, args) {
-  const raw = await readFile(file, "utf8");
-  if (file.toLowerCase().endsWith(".csv")) {
-    return { data: parseCsvRecords(raw), simulation_type: args.type || "robotics" };
+  if (/\.(mcap|bag)$/i.test(file)) {
+    const { readRecording } = await import("../lib/robotics-import.js");
+    const recording = await readRecording(new Uint8Array(await readFile(file)), file, { topic: args.topic, episode: args.episode, profile: args.profileData });
+    if (recording.requires_topic) throw new Error(`Choose --topic: ${recording.topics.map((t) => t.topic).join(", ")}`);
+    return { data: recording.rows, simulation_type: "robotics" };
   }
+  const raw = await readFile(file, "utf8");
+  if (file.toLowerCase().endsWith(".csv")) { const parsed = parseCsvDocument(raw); return { data: parsed.rows, source_lines: parsed.sourceLines, simulation_type: args.type || "robotics" }; }
   try {
     return JSON.parse(raw);
   } catch {
@@ -416,73 +476,23 @@ async function loadPayload(file, key, args) {
   }
 }
 
-function parseCsvRecords(source) {
-  const rows = [];
-  let row = [];
-  let cell = "";
-  let quoted = false;
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i];
-    if (quoted) {
-      if (char === '"' && source[i + 1] === '"') { cell += '"'; i++; }
-      else if (char === '"') quoted = false;
-      else cell += char;
-    } else if (char === '"' && cell.length === 0) quoted = true;
-    else if (char === ",") { row.push(cell); cell = ""; }
-    else if (char === "\n" || char === "\r") {
-      if (char === "\r" && source[i + 1] === "\n") i++;
-      row.push(cell); cell = "";
-      if (row.some((value) => value.trim() !== "")) rows.push(row);
-      row = [];
-    } else cell += char;
-  }
-  row.push(cell);
-  if (row.some((value) => value.trim() !== "")) rows.push(row);
-  if (quoted) throw new Error("CSV has an unterminated quoted field.");
-  if (rows.length < 2) throw new Error("CSV needs a header row and at least one data row.");
-
-  const headers = rows[0].map((value) => value.trim().replace(/^\uFEFF/, ""));
-  if (headers.some((name) => !name)) throw new Error("CSV column names cannot be blank.");
-  if (new Set(headers).size !== headers.length) throw new Error("CSV column names must be unique.");
-  return rows.slice(1).map((values, index) => {
-    if (values.length !== headers.length) {
-      throw new Error(`CSV row ${index + 2} has ${values.length} fields; expected ${headers.length}.`);
-    }
-    return Object.fromEntries(headers.map((header, column) => {
-      const value = values[column].trim();
-      if (value === "") return [header, null];
-      if (["episode_id", "episode", "trajectory_id", "sequence_id"].includes(header.toLowerCase())) {
-        return [header, value];
-      }
-      const numeric = Number(value);
-      return [header, Number.isFinite(numeric) ? numeric : value];
-    }));
-  });
-}
 
 async function runValidation(file, key, args) {
   if (!existsSync(file)) return fail(`File not found: ${file}`);
   const cfg = await readConfig();
   const projectCfg = await readJson("simapi.json");
+  args.profile ??= projectCfg.profile || cfg.profile;
+  args["fail-on"] ??= projectCfg.fail_on || cfg.fail_on;
   let profileLimits = {};
   let profileConditions = {};
   if (args.profile === "") return fail("--profile requires a JSON profile path.");
   if (args.profile) {
     let profile;
-    try { profile = JSON.parse(await readFile(args.profile, "utf8")); }
-    catch (e) { return fail(`Could not read robotics profile ${args.profile}: ${e.message}`); }
-    profileLimits = profile.robotics_limits ?? (profile.conditions ? {} : profile);
-    profileConditions = profile.conditions || {};
-    if (typeof profileConditions !== "object" || Array.isArray(profileConditions)) return fail("Profile conditions must be a numeric map.");
-    if (Object.values(profileConditions).some((value) => typeof value !== "number" || !Number.isFinite(value))) return fail("Profile conditions must contain finite numbers.");
-    for (const option of ["max_time_step", "velocity_tolerance", "acceleration_tolerance"]) {
-      if (profileConditions[option] !== undefined && profileConditions[option] <= 0) return fail(`${option} must be positive.`);
-    }
-    if (!profileLimits || typeof profileLimits !== "object" || Array.isArray(profileLimits) ||
-        Object.values(profileLimits).some((range) => !Array.isArray(range) || range.length !== 2 ||
-          !range.every((value) => typeof value === "number" && Number.isFinite(value)) || !(range[0] < range[1]))) {
-      return fail("Robotics profile must contain signal ranges as [minimum, maximum] pairs.");
-    }
+    try { profile = await loadProfile(args.profile); }
+    catch (e) { return fail(e.message); }
+    profileLimits = profile.robotics_limits;
+    profileConditions = profile.conditions;
+    args.profileData = profile;
   }
   let payload;
   try {
@@ -493,12 +503,12 @@ async function runValidation(file, key, args) {
   const body = Array.isArray(payload)
     ? {
         data: payload,
-        simulation_type: args.type || projectCfg.simulation_type || cfg.simulation_type || "aerodynamics",
+        simulation_type: args.type || projectCfg.simulation_type || cfg.simulation_type || "robotics",
         conditions: projectCfg.conditions || {},
         ...(projectCfg.robotics_limits ? { robotics_limits: projectCfg.robotics_limits } : {}),
       }
     : {
-        simulation_type: args.type || payload.simulation_type || projectCfg.simulation_type || cfg.simulation_type || "aerodynamics",
+        simulation_type: args.type || payload.simulation_type || projectCfg.simulation_type || cfg.simulation_type || "robotics",
         conditions: payload.conditions || projectCfg.conditions || {},
         ...(payload.robotics_limits || projectCfg.robotics_limits
           ? { robotics_limits: payload.robotics_limits || projectCfg.robotics_limits }
@@ -511,7 +521,9 @@ async function runValidation(file, key, args) {
     body.conditions = { ...body.conditions, ...profileConditions };
   }
   if (args.report === "") return fail("--report requires an output path.");
-  if (args["no-ai"]) body.run_ai = false;
+  body.run_ai = !args["no-ai"];
+  if (args["fail-on"] && !["warning", "failed"].includes(args["fail-on"])) return fail("--fail-on must be warning or failed.");
+  if (args.format && args.format !== "github") return fail("--format must be github.");
 
   const t0 = Date.now();
   let res;
@@ -526,11 +538,15 @@ async function runValidation(file, key, args) {
     const err = res.json?.error || {};
     return fail(`[${err.code || res.status}] ${err.message || "validation error"}`);
   }
-  const r = res.json;
+  const r = { ...res.json, validation_context: { simulation_type: body.simulation_type, robotics_limits: body.robotics_limits || {}, conditions: body.conditions || {} } };
+  if (args.format === "github") for (const line of githubAnnotations(r, file, payload.source_lines)) process.stderr.write(line + "\n");
   await writeJson(LAST_RUN_PATH, { file, t: Date.now(), result: r });
   if (args.report) await writeFile(args.report, JSON.stringify(r, null, 2) + "\n");
   if (args.json) stdout.write(JSON.stringify(r, null, 2) + "\n");
-  else renderReport(r, file, body.simulation_type);
+  else if (args.summary || args.format === "github" || env.CI) {
+    stdout.write(`${r.status.toUpperCase()}  ${file}  ${r.trials_submitted ?? "?"} samples, ${r.trials_excluded ?? "?"} excluded, ${r.failed ?? "?"} failed checks, ${r.warnings ?? "?"} warnings\n`);
+    for (const issue of (r.issues || []).slice(0, 3)) stdout.write(`  ${issue.human_name || issue.name}: ${issue.detail || ""}\n`);
+  } else renderReport(r, file, body.simulation_type);
 
   if (args["fail-on"] === "warning" && r.status !== "passed") process.exitCode = 1;
   if (args["fail-on"] === "failed" && r.status === "failed") process.exitCode = 1;
@@ -596,8 +612,12 @@ function renderReport(r, file, simType) {
 
 // ── Help ──────────────────────────────────────────────────────────────────────
 const HELP = {
+  inspect: { usage: "simapi inspect <file>", desc: "Inspect samples, episodes, timing, signal ranges and missing values locally.", opts: [["--json", "machine-readable inspection"], ["--topic <name>", "choose a recording topic"]] },
+  import: { usage: "simapi import <file> --output <run.json>", desc: "Extract JointState samples from ROS 1 bags, ROS 1/2 MCAP, CSV, or JSON. Select --topic when several channels exist.", opts: [["--topic <topic>", "select a JointState channel"], ["--list-topics", "inspect recording channels"], ["--profile <name|file>", "load joint metadata, including prismatic effort units"], ["--episode <id>", "assign an episode identifier"]] },
+  profile: { usage: "simapi profile <import|list|show|delete>", desc: "Import URDF joint limits or JSON profiles, then reuse them by name.", ex: ["simapi profile import arm.urdf --name arm --output arm-profile.json", "simapi profile list", "simapi profile show arm"] },
+  compare: { usage: "simapi compare baseline.json current.json", desc: "Compare checks, episode findings, exclusions, and configuration.", opts: [["--json", "JSON comparison"], ["--fail-on regression", "fail CI on new or worsened findings"]] },
   init: { usage: "simapi init", desc: "Create a simapi.json config in the current project." },
-  validate: { usage: "simapi validate <file>", desc: "Validate a .json, .csv, or .txt simulation file and print the report. Plain-text/log files are converted to JSON with AI.", opts: [["--type <domain>", "simulation domain (CSV defaults to robotics)"], ["--profile <file>", "robotics limits and trajectory check options"], ["--report <file>", "save the full JSON report"], ["--json", "raw JSON output"], ["--no-ai", "skip the AI second pass"], ["--fail-on <level>", "exit non-zero on warning|failed"]], ex: ["simapi validate episode.csv --profile arm-profile.json --fail-on warning", "simapi validate simulation.json", "simapi validate simulations.txt --type aerodynamics"] },
+  validate: { usage: "simapi validate <file>", desc: "Validate a .json, .csv, or .txt simulation file and print the report. Plain-text/log files are converted to JSON with AI.", opts: [["--summary", "compact report (automatic in CI)"], ["--format github", "emit GitHub Actions annotations"], ["--topic <name>", "select a recording channel"], ["--type <domain>", "simulation domain (defaults to robotics)"], ["--profile <file>", "robotics limits and trajectory check options"], ["--report <file>", "save the full JSON report"], ["--json", "raw JSON output"], ["--no-ai", "skip the AI second pass"], ["--fail-on <level>", "exit non-zero on warning|failed"]], ex: ["simapi validate episode.csv --profile arm-profile.json --fail-on warning", "simapi validate simulation.json", "simapi validate simulations.txt --type aerodynamics"] },
   domains: { usage: "simapi domains", desc: "List the supported simulation types." },
   doctor: { usage: "simapi doctor [--fix]", desc: "Diagnose config, connectivity, and project setup." },
   explain: { usage: "simapi explain", desc: "Explain the issues from the most recent validation run in detail." },
@@ -616,7 +636,11 @@ function printHelp() {
   stdout.write(`  ${c.bold("Usage")}\n    simapi ${c.dim("<command> [options]")}\n\n`);
   stdout.write(`  ${c.bold("Commands")}\n`);
   const items = [
-    ["init", "Create a simapi.json config"],
+    ["init", "Create a robotics simapi.json config"],
+    ["inspect <file>", "Inspect episode timing, ranges and missing signals"],
+    ["import <recording> --output <file>", "Extract JointState data from ROS bags or MCAP"],
+    ["profile <import|list|show|delete>", "Reusable JSON and URDF profiles"],
+    ["compare <baseline> <current>", "Compare checks and episode findings"],
     ["validate <file>", "Validate JSON or CSV simulation data"],
     ["watch <file>", "Re-validate on file change"],
     ["domains", "List supported simulation types"],
@@ -630,7 +654,7 @@ function printHelp() {
     ["version", "Show the CLI version"],
     ["help", "Show this help"],
   ];
-  for (const [name, desc] of items) stdout.write(`    ${c.cyan(name.padEnd(18))} ${c.dim(desc)}\n`);
+  for (const [name, desc] of items) stdout.write(`    ${c.cyan(name)}\n      ${c.dim(desc)}\n`);
   stdout.write(`\n  ${c.dim("Run")} ${c.cyan("simapi <command> --help")} ${c.dim("for details on a command.")}\n\n`);
 }
 
@@ -673,12 +697,12 @@ function parse(argv) {
     if (a === "--help" || a === "-h") out.help = true;
     else if (a === "--json") out.json = true;
     else if (a === "--no-ai") out["no-ai"] = true;
-    else if (a === "--report") out.report = argv[++i] ?? "";
+    else if (["--report", "--output", "--topic", "--episode", "--name", "--format", "--type", "--profile", "--fail-on"].includes(a)) { const value = argv[++i]; if (!value || value.startsWith("--")) throw new Error(`${a} requires a value.`); out[a.slice(2)] = value; }
+    else if (a === "--summary") out.summary = true;
+    else if (a === "--list-topics") out["list-topics"] = true;
     else if (a === "--fix") out.fix = true;
     else if (a === "--apply") out.apply = true;
-    else if (a === "--type") out.type = argv[++i];
-    else if (a === "--profile") out.profile = argv[++i] ?? "";
-    else if (a === "--fail-on") out["fail-on"] = argv[++i];
+    else if (a.startsWith("--")) throw new Error(`Unknown option: ${a}`);
     else out._.push(a);
   }
   return out;

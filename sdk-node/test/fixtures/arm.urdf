@@ -1,0 +1,4 @@
+<robot name="Test arm">
+  <joint name="shoulder" type="revolute"><limit lower="-1" upper="1" velocity="2" effort="10"/></joint>
+  <joint name="slider" type="prismatic"><limit lower="0" upper="0.5" velocity="0.2" effort="20"/></joint>
+</robot>

@@ -4,7 +4,7 @@
  * issues, exclusions, per-column statistics, checks-by-category, and renames.
  */
 import { analyzeTrajectories, type RoboticsSummary, type TrajectoryCheck } from "./robotics-trajectory";
-import { validate, canonical, type SimulationType, type CheckResult } from "./validation-engine";
+import { validate, canonical, roboticsEvidenceLimits, type SimulationType, type CheckResult } from "./validation-engine";
 
 export interface RichIssue {
   name: string;
@@ -185,6 +185,20 @@ export function richValidate(
   // 4. Near-duplicate blocks (standardized cosine similarity, sliding window).
   nearDuplicates(rowNum, rows.length, exclude, addCheck);
 
+  }
+
+  if (simType === "robotics") {
+    const requiredSignals = Object.keys(roboticsEvidenceLimits(rows, roboticsLimits));
+    rows.forEach((row, index) => {
+      const values = Object.fromEntries(Object.entries(row).map(([key, value]) => [canonical(key), value]));
+      for (const signal of requiredSignals) {
+        const value = values[signal];
+        if (typeof value === "number" && Number.isFinite(value)) continue;
+        if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) continue;
+        addCheck(`robotics_missing:${signal}`, `Missing ${signal}`, `${signal} is missing or non-numeric in sample ${index + 1}.`, "robotics_limits", "failed");
+        exclude(index, `${signal} is missing or non-numeric`, "critical");
+      }
+    });
   }
 
   const robotics = simType === "robotics" ? analyzeTrajectories(rows, roboticsLimits, conditions) : undefined;

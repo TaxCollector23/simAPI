@@ -9,7 +9,7 @@ export function Footer() {
           <div className="max-w-sm">
             <Link href="/" className="landing-footer-brand text-xl font-semibold">SimAPI</Link>
             <p className="mt-4 text-sm leading-6 text-white/60">
-              Check simulation data before you use it to train a model or move a robot.
+              Validate robotics data before training or hardware.
             </p>
           </div>
           {site.footerGroups.map((group) => (

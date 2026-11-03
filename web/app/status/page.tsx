@@ -34,7 +34,7 @@ export default function StatusPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 p-5">
             <span className="text-white/80">Validation engine</span>
             <span className="font-mono text-sm text-white/65">
-              {health ? (health.python_backend ? "Python dimensional engine" : "TypeScript fallback") : "Unknown"}
+              {health ? (health.python_backend ? "Python dimensional engine" : "Hosted robotics engine") : "Unknown"}
             </span>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 p-5">
@@ -42,9 +42,7 @@ export default function StatusPage() {
             <span className="font-mono text-sm text-white/65">{health?.domains ?? "Unknown"}</span>
           </div>
         </div>
-        {health && !health.python_backend && (
-          <p className="mt-5 text-sm leading-6 text-white/60">The full Python backend is not connected to this site; validation uses the TypeScript fallback.</p>
-        )}
+
       </div>
     </div>
   );

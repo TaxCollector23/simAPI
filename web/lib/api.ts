@@ -1,3 +1,4 @@
+import type { Evidence } from "./robotics-workflow.js";
 import type { RoboticsSummary } from "./robotics-trajectory";
 /**
  * API client for the in-browser validation dashboard (ported from the desktop
@@ -73,6 +74,10 @@ export interface AIResult {
 }
 
 export interface ValidationResult {
+  robotics_evidence?: Evidence[];
+  robotics_evidence_total?: number;
+  robotics_evidence_truncated?: boolean;
+  validation_context?: { simulation_type: string; robotics_limits: Record<string, [number, number]>; conditions: Record<string, number> };
   robotics_summary?: RoboticsSummary;
   robotics_checks?: { name: string; status: "passed" | "warning" | "failed"; detail: string; violations: number }[];
   job_id: string;
