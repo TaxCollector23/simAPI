@@ -28,6 +28,24 @@ SimAPI checks data; it does not certify a robot, prove sim-to-real transfer, or
 replace engineering review. A clean report means only that the checks in that
 run did not find a reported violation.
 
+## Feature bundle deployment map
+
+The Physical-AI bundle adds focused modules around the existing validation
+engine. These are the repository destinations for its files:
+
+| Bundle file | Repository destination | Purpose |
+| --- | --- | --- |
+| `simapi_mcp.py` | `simapi_mcp.py` | Expose robotics validation as MCP tools for local and authenticated hosted clients. |
+| `mcp-architecture.md` | `docs/mcp-architecture.md` | Explain the MCP request path and its stdio/HTTP security boundaries. |
+| `prompts.md` | `prompts.md` | Keep the complete fix-it and architecture prompts available to contributors. |
+| `physical_ai.py` | `core/physical_ai.py` | Add episode labels, stream synchronization, action/state checks, and clean episode export. |
+| `ftc_frc.py` | `core/ftc_frc.py` | Validate FTC/FRC power, encoders, battery, heading, and odometry signals. |
+| `dashboard_extras.js` | `dashboard/dashboard_extras.js` | Add episode chips, clean CSV export, and MCP setup to the existing static dashboard. |
+
+The engine modules live under `core/`; the browser add-on sits beside the
+static dashboard it extends; deployment and contributor guidance stay in the
+README and `docs/`.
+
 ## Manipulation-arm validation
 
 For robotics runs, SimAPI applies broad plausibility checks to recognized signals
