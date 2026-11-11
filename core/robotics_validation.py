@@ -18,6 +18,7 @@ def check_robotics_limits(
     conditions: dict[str, float] | None = None,
     *,
     engine: RoboticsValidationEngine | None = None,
+    additional_suites: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Validate one run through the composable robotics engine.
 
@@ -26,4 +27,8 @@ def check_robotics_limits(
     check suites.
     """
     runner = engine or RoboticsValidationEngine()
+    if additional_suites:
+        return runner.validate(
+            data, configured_limits, source_rows, conditions, additional_suites=additional_suites
+        )
     return runner.validate(data, configured_limits, source_rows, conditions)
