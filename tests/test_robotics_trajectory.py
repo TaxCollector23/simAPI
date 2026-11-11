@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from core.robotics_trajectory import analyze_trajectories
+from core.robotics_trajectory import analyze_trajectories, normalize_limit_key
 from core.robotics_validation import check_robotics_limits
 
 CASES = [
@@ -95,3 +95,17 @@ def test_configured_signal_missing_in_one_sample_fails_closed():
 def test_per_joint_defaults_apply_without_custom_profile():
     report = check_robotics_limits(pd.DataFrame([{"joint_7_torque": 1e8}]))
     assert report["checks"][0]["status"] == "failed"
+
+
+def test_effort_limit_key_normalizes_to_torque_without_renaming_source_signals():
+    assert normalize_limit_key("joint_1_effort") == "joint_1_torque"
+    assert normalize_limit_key("joint_1_torque") == "joint_1_torque"
+    assert analyze_trajectories(
+        [{"time": 0.0, "joint_1_position": 0.0}, {"time": 0.1, "joint_1_position": 0.1}],
+        {"joint_1_effort": (-2.0, 2.0)},
+        {},
+    )["checks"] == analyze_trajectories(
+        [{"time": 0.0, "joint_1_position": 0.0}, {"time": 0.1, "joint_1_position": 0.1}],
+        {"joint_1_torque": (-2.0, 2.0)},
+        {},
+    )["checks"]

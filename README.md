@@ -140,7 +140,10 @@ recordings and LeRobot parquet datasets. Install their dependencies with
 `pip install -e '.[robotics-data]'`. Both adapters preserve episode boundaries
 and send the resulting records through the same deterministic robotics engine
 used by the API. ROS effort remains measured effort; it is not relabeled as a
-commanded action. LeRobot action vectors remain `action_N` signals.
+commanded action. A ROS `joint_N_effort` signal can use the matching
+`joint_N_torque` limit without renaming the source column; the report summary
+records the alias. LeRobot action vectors remain `action_N` signals and are
+never treated as torque.
 
 ```bash
 python -m integrations.ros2_loader recording.db3 --out ros2-rows.csv \

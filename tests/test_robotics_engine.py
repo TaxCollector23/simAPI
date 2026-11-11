@@ -75,3 +75,43 @@ def test_engine_can_run_replacement_suite_list_without_trajectory_suite():
         "assumptions": [],
     }
     assert report["evidence"] == {"entries": [], "total": 0, "truncated": False}
+
+
+def test_ros_effort_uses_configured_torque_limit_and_keeps_source_name():
+    rows = [{"joint_1_effort": 95.0}]
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame(rows),
+        configured_limits={"joint_1_torque": (-70.0, 70.0)},
+        source_rows=rows,
+    )
+
+    check = next(check for check in report["checks"] if check["status"] == "failed")
+    assert check["name"] == "robotics_limit:joint_1_effort"
+    assert check["column"] == "joint_1_effort"
+    assert report["excluded"] == {0: ["joint_1_effort=95 outside [-70, 70]"]}
+    assert report["summary"]["effort_torque_aliases"] == {
+        "joint_1_effort": "joint_1_torque"
+    }
+    assert report["evidence"]["entries"][0]["signal"] == "joint_1_effort"
+    assert report["evidence"]["entries"][0]["observed"] == 95.0
+
+
+def test_effort_and_torque_columns_are_both_checked_when_both_exist():
+    rows = [{"joint_1_torque": 10.0, "joint_1_effort": 95.0}]
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame(rows),
+        configured_limits={"joint_1_torque": (-70.0, 70.0)},
+        source_rows=rows,
+    )
+
+    checks = {
+        check["column"]: check
+        for check in report["checks"]
+        if check["name"].startswith("robotics_limit:")
+    }
+    assert checks["joint_1_torque"]["status"] == "passed"
+    assert checks["joint_1_effort"]["status"] == "failed"
+    assert {entry["signal"] for entry in report["evidence"]["entries"]} == {
+        "joint_1_effort"
+    }
+    assert report["summary"]["effort_torque_aliases"]["joint_1_effort"] == "joint_1_torque"

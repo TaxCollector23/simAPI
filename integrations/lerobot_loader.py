@@ -1,7 +1,10 @@
 """Convert LeRobot parquet episodes into the SimAPI robotics data shape.
 
 Install parquet support with ``pip install pyarrow``. Hub access is optional
-and loaded only by :func:`validate_hf_dataset`.
+and loaded only by :func:`validate_hf_dataset`. State and action vectors keep
+their distinct meanings; the loader does not infer effort from actions. When
+an input table supplies an explicit ``*_effort`` signal, the shared robotics
+engine can use its corresponding ``*_torque`` limit without renaming it.
 """
 
 from __future__ import annotations
@@ -82,7 +85,11 @@ def load_lerobot(
     max_joints: int = 14,
     keep_timestamps: bool = True,
 ) -> pd.DataFrame:
-    """Load local LeRobot parquet shards as episode-aware robotics rows."""
+    """Load local LeRobot parquet shards as episode-aware robotics rows.
+
+    The loader emits measured state as position signals and commands as
+    ``action_N``. It does not infer torque/effort from command vectors.
+    """
     if max_episodes is not None and max_episodes < 1:
         raise ValueError("max_episodes must be positive or None")
     if max_joints < 1:

@@ -164,14 +164,49 @@ class RoboticsValidationEngine:
             normalize(str(signal)): (float(bounds[0]), float(bounds[1]))
             for signal, bounds in (configured_limits or {}).items()
         }
+        columns = {normalize(str(column)): column for column in data.columns}
         limits = dict(DEFAULT_ROBOTICS_LIMITS)
-        for column in data.columns:
-            canonical = normalize(str(column))
+        for canonical in columns:
             if canonical.startswith("joint"):
-                for quantity in ("position", "velocity", "acceleration", "torque"):
-                    if canonical.endswith("_" + quantity):
-                        limits[canonical] = DEFAULT_ROBOTICS_LIMITS["joint_" + quantity]
+                quantity = "torque" if canonical.endswith("_effort") else next(
+                    (name for name in ("position", "velocity", "acceleration", "torque")
+                     if canonical.endswith("_" + name)),
+                    None,
+                )
+                if quantity:
+                    limits[canonical] = DEFAULT_ROBOTICS_LIMITS["joint_" + quantity]
         limits.update(configured)
+
+        # Resolve torque/effort aliases against actual data columns. Honor a
+        # bound supplied for its exact spelling first, then apply it to the
+        # matching alias when that column lacks its own configured bound.
+        # Checks and evidence use the original source-column name.
+        effort_torque_aliases: dict[str, str] = {}
+        for configured_signal, bounds in configured.items():
+            if configured_signal.endswith("_torque"):
+                alias_signal = configured_signal[:-len("_torque")] + "_effort"
+            elif configured_signal.endswith("_effort"):
+                alias_signal = configured_signal[:-len("_effort")] + "_torque"
+            else:
+                continue
+            direct_column = configured_signal in columns
+            alias_column = alias_signal in columns
+            if not direct_column and alias_column:
+                limits.pop(configured_signal, None)
+                if alias_signal not in configured:
+                    limits[alias_signal] = bounds
+            elif direct_column and alias_column and alias_signal not in configured:
+                limits[alias_signal] = bounds
+            if alias_column:
+                effort_signal = configured_signal if configured_signal.endswith("_effort") else alias_signal
+                torque_signal = configured_signal if configured_signal.endswith("_torque") else alias_signal
+                effort_torque_aliases[effort_signal] = torque_signal
+
+        for canonical in columns:
+            if canonical.endswith("_effort"):
+                effort_torque_aliases.setdefault(
+                    canonical, canonical[:-len("_effort")] + "_torque"
+                )
 
         rows = source_rows if source_rows is not None else data.to_dict("records")
         options = dict(conditions or {})
@@ -191,6 +226,8 @@ class RoboticsValidationEngine:
             "episode_column": None,
             "assumptions": [],
         }
+        if effort_torque_aliases:
+            summary["effort_torque_aliases"] = effort_torque_aliases
         for suite in self.suites:
             result = suite.run(context)
             checks.extend(result.checks)

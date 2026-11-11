@@ -2,7 +2,9 @@
 
 Install the optional reader with ``pip install rosbags``. No ROS installation
 is needed. Joint positions, velocities, and measured efforts retain their
-distinct meanings; commanded actions are never inferred from effort.
+distinct meanings; commanded actions are never inferred from effort. ROS
+JointState effort columns keep their ``_effort`` names, while configured
+``_torque`` limits are applied to the matching measured effort signal.
 """
 
 from __future__ import annotations
@@ -65,7 +67,9 @@ def load_rosbag2(
 
     ``episode_id`` changes on a backwards timestamp reset and optionally at
     fixed-duration boundaries. A ``.db3`` path is accepted when its parent is
-    a standard rosbag2 directory containing ``metadata.yaml``.
+    a standard rosbag2 directory containing ``metadata.yaml``. Measured motor
+    values remain named ``joint_N_effort`` in rows and evidence; a matching
+    ``joint_N_torque`` profile limit is recognized without renaming the data.
     """
     if episode_every_s is not None and (not math.isfinite(episode_every_s) or episode_every_s <= 0):
         raise ValueError("episode_every_s must be a finite positive number")

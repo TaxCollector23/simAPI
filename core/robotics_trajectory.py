@@ -14,6 +14,19 @@ def normalize(value: str) -> str:
     return value.strip().lower().replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
+def normalize_limit_key(value: str) -> str:
+    """Normalize a configured signal limit without renaming source columns.
+
+    ROS JointState calls measured motor torque ``effort``. For lookup, treat
+    ``*_effort`` as the corresponding ``*_torque`` signal while leaving row
+    keys and displayed signal names untouched.
+    """
+    key = normalize(value)
+    if key.endswith("_effort"):
+        return key[:-len("_effort")] + "_torque"
+    return key
+
+
 def number(value: Any) -> float | None:
     if value is None or isinstance(value, bool) or (isinstance(value, str) and not value.strip()):
         return None
@@ -33,7 +46,7 @@ def analyze_trajectories(
     keys = set().union(*(row.keys() for row in rows)) if rows else set()
     time_key = next((key for key in TIME_KEYS if key in keys), None)
     group_key = next((key for key in GROUP_KEYS if key in keys), None)
-    bounds = {normalize(key): value for key, value in limits.items()}
+    bounds = {normalize_limit_key(key): value for key, value in limits.items()}
     groups: dict[str, list[int]] = {}
     for index, row in enumerate(rows):
         group = str(row.get(group_key, "(missing episode)")) if group_key else "Episode 1"
