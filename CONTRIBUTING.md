@@ -17,6 +17,7 @@ make run            # starts API + dashboard
 ```
 api/     FastAPI server, config, security, observability, error contract
 core/    Validation engine: ingestion, physics rules, AI reasoning layer
+integrations/  Optional robotics data adapters (ROS 2 rosbag2, LeRobot parquet)
 sdk/     Python client SDK
 tests/   Pytest suite (unit + API contract)
 dashboard/  Static demo dashboard
@@ -47,3 +48,29 @@ CI must be green. PRs are squash-merged; write a clear, imperative title.
 3. Register the method in the `layers` list in `PhysicsValidator.validate`.
 4. Add column aliases to `COLUMN_ALIASES` in `core/ingestion.py`.
 5. Add a contract test.
+
+## Extending the robotics validation engine
+
+Robotics validation runs through an ordered collection of check suites. The API
+holds one `RoboticsValidationEngine`; each run passes through its suites and
+then receives the shared episode summary and evidence report. Existing suites
+live in `core/robotics_engine.py`, while interval motion checks are implemented
+in `core/robotics_trajectory.py`.
+
+Add a suite by implementing `run(context)` and returning a
+`RoboticsSuiteResult` with checks and zero-based excluded sample indices. The
+context provides the input frame, source records, configured and resolved
+limits, and conditions. Append the suite to `ROBOTICS_ENGINE.suites` in
+`api/server.py` so the existing defaults continue to run. Keep checks
+deterministic and include the signal, limits, or assumptions needed to explain
+each finding. The compatibility function
+`check_robotics_limits` remains available to Python callers and accepts an
+injected engine when custom suites are needed. The API response schema and
+standard check and evidence assembly remain centralized in the engine.
+
+The `integrations/` modules convert external robot datasets into this engine's
+episode-aware table format. Keep optional file-format dependencies out of the
+core validation path; install them with `pip install -e '.[robotics-data]'`.
+CI exports are generated from the public validation response by
+`core/report_export.py`, while `core/training_data_card.py` builds the
+deterministic Markdown provenance report.

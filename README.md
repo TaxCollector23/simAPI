@@ -133,6 +133,35 @@ Reports add `validation_context` and `robotics_evidence`: episode ID, zero-based
 
 The playground runs deterministic robotics checks with AI review disabled. Recorded data can support a policy review, but SimAPI does not execute policies, simulate collisions, or certify hardware.
 
+### Local ROS 2 and LeRobot adapters
+
+The Python repository includes optional adapters for ROS 2 rosbag2 `.db3`
+recordings and LeRobot parquet datasets. Install their dependencies with
+`pip install -e '.[robotics-data]'`. Both adapters preserve episode boundaries
+and send the resulting records through the same deterministic robotics engine
+used by the API. ROS effort remains measured effort; it is not relabeled as a
+commanded action. LeRobot action vectors remain `action_N` signals.
+
+```bash
+python -m integrations.ros2_loader recording.db3 --out ros2-rows.csv \
+  --report ros2-report.json
+python -m integrations.lerobot_loader ./dataset --max-episodes 20 \
+  --out robot-rows.csv --report lerobot-report.json
+```
+
+The local report endpoint also exports JUnit XML, SARIF, or a Markdown training
+data card from the standard validation request:
+
+```bash
+curl -X POST 'http://localhost:8000/v1/validate/report?format=junit' \
+  -H 'Content-Type: application/json' \
+  -d '{"simulation_type":"robotics","run_ai":false,"data":[{"episode_id":"ep1","t":0,"joint_1_position":0.1},{"episode_id":"ep1","t":0.01,"joint_1_position":0.11}]}'
+```
+
+These adapters run in the repository's Python environment. The hosted validator
+continues to accept tabular numeric records; send the adapter's converted rows
+to the API when validating through the hosted service.
+
 ## Use the hosted service
 
 The same hosted endpoint can be called from a browser, a CI job, or an
@@ -228,10 +257,10 @@ and [CLI guide](https://simapilander.vercel.app/docs/sdks/cli).
 
 The hosted validator accepts tabular numeric records. Robotics limit checks are
 available for recognized scalar signals and caller-provided per-signal ranges;
-timestamps are checked for increasing order within each episode. URDF-derived
-limits, ROS 2 bag and MCAP ingestion, contact and collision validation, peak
-motion reconstruction, and simulator-specific adapters are not implemented yet. Those are the next steps for supporting more
-manipulation-arm workflows.
+timestamps are checked for increasing order within each episode. Local Python
+adapters handle ROS 2 `.db3` and LeRobot parquet ingestion. Direct hosted upload
+for those formats, URDF-derived limit import, contact and collision validation,
+and peak-motion reconstruction remain future work.
 
 ## Contributing
 

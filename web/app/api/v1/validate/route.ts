@@ -205,6 +205,7 @@ export async function POST(req: Request) {
           passed: pyResult.passed ?? 0,
           warnings: pyResult.warnings ?? 0,
           failed: pyResult.failed ?? 0,
+          informational: pyResult.informational ?? 0,
           issues: (pyResult.issues ?? []).map((i: Record<string, unknown>) => ({
             name: i.name, human_name: i.description, status: i.status,
             description: i.detail ?? i.description, detail: i.detail ?? "",

@@ -110,6 +110,7 @@ class ValidationReport:
     row_findings: list[RowFinding]
     suitability: list[SuitabilityFinding] = field(default_factory=list)
     suppressions: list[str] = field(default_factory=list)
+    surface_diagnostics: dict = field(default_factory=dict)
 
     @property
     def impossible_rows(self) -> set[int]:
@@ -136,6 +137,7 @@ class ValidationReport:
             # "your data never covers the high-AoA regime" is not a row defect.
             "training_suitability": [s.__dict__ for s in self.suitability],
             "suppressions": list(self.suppressions),
+            "surface_diagnostics": dict(self.surface_diagnostics),
             "known_impossible": KNOWN_IMPOSSIBLE,
         }
 
@@ -264,7 +266,13 @@ def validate(
 
     # ── Layer 5 ──────────────────────────────────────────────────────────
     anchor_columns = {c for a in anchors for c in a.columns}
-    surface_findings = find_surface_anomalies(si_data, units, anchor_columns=anchor_columns)
+    surface_diagnostics: dict = {}
+    surface_findings = find_surface_anomalies(
+        si_data,
+        units,
+        anchor_columns=anchor_columns,
+        diagnostics=surface_diagnostics,
+    )
 
     # ── Layer 6 ──────────────────────────────────────────────────────────
     semantic_violations = check_semantic_bounds(data)
@@ -299,6 +307,7 @@ def validate(
         structural_findings=structural_findings, condition_assertions=condition_assertions,
         units_conflicts=units_conflicts, row_findings=row_findings,
         suitability=suitability, suppressions=suppressions,
+        surface_diagnostics=surface_diagnostics,
     )
 
 

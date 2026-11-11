@@ -40,7 +40,7 @@ export interface RichResult {
   issues: RichIssue[];
   exclusions: { trial_number: number; trial_index: number; reason: string; severity: string }[];
   statistics: Record<string, RichStat>;
-  checks_by_category: Record<string, { passed: number; warning: number; failed: number }>;
+  checks_by_category: Record<string, { passed: number; warning: number; failed: number; info?: number }>;
   columns_renamed: Record<string, string>;
   robotics_summary?: RoboticsSummary;
   robotics_checks?: TrajectoryCheck[];

@@ -824,8 +824,17 @@ class DataIngester:
         rename = {}
         used: set = set()
         for col in df.columns:
+            raw = str(col).strip()
             norm = _normalize_col(col)
-            canonical = COLUMN_ALIASES.get(norm) or COLUMN_ALIASES.get(col.lower())
+            # Lower-case ``t`` is a common elapsed-time column in robot logs
+            # and physics tables. Preserve it for the time dimension; only
+            # uppercase ``T`` retains its conventional temperature meaning.
+            if raw == "T":
+                canonical = "temperature"
+            elif norm == "t":
+                canonical = None
+            else:
+                canonical = COLUMN_ALIASES.get(norm) or COLUMN_ALIASES.get(raw.lower())
             target = canonical if (canonical and canonical != col) else col
             if target in used:
                 # Renaming this column would collide with another column

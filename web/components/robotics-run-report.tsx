@@ -102,7 +102,7 @@ export function RoboticsRunReport({
         {(result.robotics_checks ?? []).map((check) => (
           <div key={check.name} className="flex items-start gap-3 text-sm">
             <span
-              className={`w-16 shrink-0 ${check.status === "failed" ? "text-red-400" : check.status === "warning" ? "text-amber-400" : "text-pass"}`}
+              className={`w-16 shrink-0 ${check.status === "failed" ? "text-red-400" : check.status === "warning" ? "text-amber-400" : check.status === "info" ? "text-sky-300" : "text-pass"}`}
             >
               {check.status}
             </span>

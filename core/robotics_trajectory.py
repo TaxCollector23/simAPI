@@ -5,7 +5,7 @@ import math
 from typing import Any
 
 ENGINE_VERSION = "manipulation-2"
-TIME_KEYS = ("time", "timestamp", "simulation_time", "sim_time", "elapsed_time")
+TIME_KEYS = ("time", "t", "timestamp", "simulation_time", "sim_time", "elapsed_time")
 GROUP_KEYS = ("episode_id", "episode", "trajectory_id", "sequence_id")
 OPTION_KEYS = ("max_time_step", "velocity_tolerance", "acceleration_tolerance")
 

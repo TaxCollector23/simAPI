@@ -235,6 +235,7 @@ function fmtN(n: number | null | undefined): string {
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, { cls: string; icon: React.ReactNode; label: string }> = {
     passed:  { cls: "bg-pass/10 text-pass border-pass/30",                   icon: <CheckCircle   className="h-3.5 w-3.5" />, label: "PASSED"  },
+    info:    { cls: "bg-sky-400/10 text-sky-300 border-sky-400/30",          icon: <Info           className="h-3.5 w-3.5" />, label: "INFO"    },
     warning: { cls: "bg-amber-400/10 text-amber-400 border-amber-400/30",    icon: <AlertTriangle className="h-3.5 w-3.5" />, label: "WARNING" },
     failed:  { cls: "bg-red-400/10 text-red-400 border-red-400/30",          icon: <XCircle       className="h-3.5 w-3.5" />, label: "FAILED"  },
   };
@@ -249,21 +250,24 @@ function StatusPill({ status }: { status: string }) {
 function IssueRow({ issue }: { issue: Issue & { human_name?: string } }) {
   const [expanded, setExpanded] = useState(false);
   const fail = issue.status === "failed";
+  const informational = issue.status === "info";
   const name = (issue as { human_name?: string }).human_name || issue.description || issue.name;
   return (
     <div
       className={cn("rounded-lg border cursor-pointer transition-colors", fail
         ? "border-red-400/20 bg-red-400/5 hover:border-red-400/40"
-        : "border-amber-400/15 bg-amber-400/5 hover:border-amber-400/35")}
+        : informational
+          ? "border-sky-400/15 bg-sky-400/5 hover:border-sky-400/35"
+          : "border-amber-400/15 bg-amber-400/5 hover:border-amber-400/35")}
       onClick={() => setExpanded(v => !v)}
     >
       <div className="flex items-center gap-3 px-3 py-2.5">
-        <span className={cn("text-sm shrink-0", fail ? "text-red-400" : "text-amber-400")}>
-          {fail ? "✗" : "⚠"}
+        <span className={cn("text-sm shrink-0", fail ? "text-red-400" : informational ? "text-sky-300" : "text-amber-400")}>
+          {fail ? "✗" : informational ? "ℹ" : "⚠"}
         </span>
         <span className="min-w-0 flex-1 text-xs text-white/75 font-medium leading-snug">{name}</span>
         <span className={cn("text-sm shrink-0 rounded px-1.5 py-0.5 border font-mono",
-          fail ? "border-red-400/20 text-red-400/60" : "border-amber-400/20 text-amber-400/60")}>
+          fail ? "border-red-400/20 text-red-400/60" : informational ? "border-sky-400/20 text-sky-300/70" : "border-amber-400/20 text-amber-400/60")}>
           {issue.category}
         </span>
         {expanded ? <ChevronUp className="h-3 w-3 text-white/20 shrink-0" /> : <ChevronDown className="h-3 w-3 text-white/20 shrink-0" />}

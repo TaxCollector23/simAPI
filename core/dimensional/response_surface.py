@@ -63,6 +63,30 @@ NEAR_CONSTANT_CV = 0.01
 Z_RANK_THRESHOLD = 4.0
 HUBER_DELTA = 1.35  # standard Huber tuning constant (~95% efficiency under Gaussian noise)
 HUBER_IRLS_ITERS = 8
+# Below this R² the fitted surface explains essentially none of the target's
+# variance -- the "response" is not a function of the available covariates.
+# That is the signature of MULTI-VALUED physics, most commonly robot
+# manipulation logs: torque depends on accelerations that aren't in the file,
+# so the same (position, velocity) state legitimately maps to several torque
+# values and trajectories double back through their own state space. A
+# residual test built on a surface that explains ~nothing ranks ordinary rows
+# as outliers purely by chance -- on such data the local check used to flag
+# ~40% of rows for "manual review", drowning the review queue in noise.
+# When this fires, the layer demotes itself for that target instead: the
+# finding becomes a dataset-level caveat ("response-surface model not
+# appropriate for this dataset"), and no row is flagged on its evidence.
+SURFACE_MIN_R2 = 0.02
+# Gate 2 (multi-valued physics): feature pairs closer than DUP_RADIUS (in
+# standardized feature units) are "near-duplicate states"; if more than
+# DUP_MIN_FRACTION of them disagree on the target by more than
+# DUP_DISCORDANCE (as a fraction of the target's P5-P95 spread), the map is
+# not a function. Thresholds chosen to clear well-separated corrupted
+# minorities (a 5% grossly-corrupted column yields ~9.5% discordant pairs)
+# while firing decisively on hidden-factor physics (typically 60%+).
+DUP_RADIUS = 0.05
+DUP_DISCORDANCE = 0.15
+DUP_MIN_PAIRS = 30
+DUP_MIN_FRACTION = 0.15
 
 MAJORITY_FRACTION = 0.4
 # Shared cap for every "how many rows can this layer flag before it stops
@@ -225,6 +249,52 @@ def _knn_predict(y: np.ndarray, feats: np.ndarray, k: int) -> tuple[np.ndarray, 
     return pred, one_sided
 
 
+def _near_duplicate_discordance(
+    feats_ref: np.ndarray, y_raw_ref: np.ndarray, target: str,
+) -> dict | None:
+    """Gate 2: detect MULTI-VALUED physics -- near-identical feature vectors
+    whose targets disagree. Returns a demotion record when the data proves
+    no single-valued surface exists, else None.
+
+    ``feats_ref`` is already standardized; ``y_raw_ref`` stays in raw units so
+    discordance is measured against the target's own material range."""
+    n = len(feats_ref)
+    if n < 50 or feats_ref.shape[1] == 0:
+        return None
+    # Pairwise distances on the reference sample (bounded by MAX_ROWS_FOR_KNN,
+    # so at most ~1500^2 -- same order the k-NN path already pays).
+    sq = np.sum(feats_ref * feats_ref, axis=1)
+    d2 = sq[:, None] + sq[None, :] - 2.0 * (feats_ref @ feats_ref.T)
+    np.maximum(d2, 0, out=d2)
+    iu, ju = np.triu_indices(n, k=1)
+    d = np.sqrt(d2[iu, ju])
+    close = d < DUP_RADIUS
+    n_pairs = int(np.count_nonzero(close))
+    if n_pairs < DUP_MIN_PAIRS:
+        return None
+    p5, p95 = np.percentile(y_raw_ref, 5), np.percentile(y_raw_ref, 95)
+    spread = p95 - p5
+    if spread < 1e-30:
+        return None
+    dy = np.abs(y_raw_ref[iu[close]] - y_raw_ref[ju[close]]) / spread
+    discordant = float(np.mean(dy > DUP_DISCORDANCE))
+    if discordant > DUP_MIN_FRACTION:
+        return {
+            "column": target,
+            "gate": "multi_valued_physics",
+            "near_duplicate_pairs": n_pairs,
+            "discordant_fraction": round(discordant, 3),
+            "thresholds": {"radius": DUP_RADIUS, "discordance": DUP_DISCORDANCE},
+            "reason": (f"near-identical feature states disagree on the target "
+                       f"({discordant:.0%} of {n_pairs} near-duplicate pairs differ by more "
+                       f"than {DUP_DISCORDANCE:.0%} of the target's range): the target is not "
+                       f"a single-valued function of the available features (multi-valued "
+                       f"physics or missing covariates). Response-surface residuals would "
+                       f"flag ordinary rows; this layer does not apply to this column."),
+        }
+    return None
+
+
 def _global_z_outliers(y_raw: np.ndarray, valid_rows: pd.Index, target: str) -> SurfaceFinding | None:
     """Degenerate response-surface check for datasets too small for k-NN:
     is this row a robust outlier within its own column, full stop. Same two
@@ -264,6 +334,7 @@ def _global_z_outliers(y_raw: np.ndarray, valid_rows: pd.Index, target: str) -> 
 def find_surface_anomalies(
     data: pd.DataFrame, units: UnitsResolution, pi_feature_columns: list[str] | None = None,
     anchor_columns: set[str] | None = None,
+    diagnostics: dict | None = None,
 ) -> list[SurfaceFinding]:
     """`anchor_columns`: columns already governed by a confirmed Layer-3
     anchor. This layer has no external ground truth -- it infers "normal"
@@ -343,6 +414,47 @@ def find_surface_anomalies(
         y_raw_ref = y_raw[ref_mask]
         query_ids = numeric.index.to_numpy()
         ref_ids = ref_numeric.index.to_numpy()
+
+        # ── Surface-signal gates ─────────────────────────────────────────
+        # Two independent ways this layer's residual machinery can be pure
+        # noise on a dataset; either one demotes the layer for this target
+        # ("model not appropriate for this dataset") instead of flagging.
+        #
+        # Gate 1 -- explained variance: if the robust global fit explains
+        # ~none of the target's variance, residuals measure nothing.
+        #
+        # Gate 2 -- multi-valued physics: near-duplicate FEATURE vectors whose
+        # targets disagree by a large fraction of the target's own range. This
+        # is the signature of robot manipulation logs: torque depends on
+        # accelerations absent from the file, so the same (position, velocity)
+        # state legitimately maps to several torque values and trajectories
+        # double back through their own state space. No single-valued surface
+        # exists, so k-NN residuals rank ordinary rows as outliers by chance.
+        global_out = _global_robust_residuals(feats_ref, y_log_ref, feats_all, y_log_all)
+        if global_out is not None:
+            global_resid, _ = global_out
+            sst = float(np.sum((y_log_all - float(np.mean(y_log_all))) ** 2))
+            ssr = float(np.sum(np.asarray(global_resid) ** 2))
+            r2 = 1.0 - ssr / sst if sst > 1e-30 else 0.0
+            if r2 < SURFACE_MIN_R2:
+                if diagnostics is not None:
+                    diagnostics.setdefault("demoted_targets", []).append({
+                        "column": target,
+                        "gate": "low_surface_r2",
+                        "surface_r2": round(r2, 4),
+                        "threshold": SURFACE_MIN_R2,
+                        "reason": (f"features explain ~none of the target's variance "
+                                   f"(surface R^2={r2:.3f} < {SURFACE_MIN_R2}); "
+                                   f"residual flagging on this column would be noise"),
+                    })
+                continue
+
+        demoted_dup = _near_duplicate_discordance(feats_ref, y_raw_ref, target)
+        if demoted_dup is not None:
+            if diagnostics is not None:
+                diagnostics.setdefault("demoted_targets", []).append(demoted_dup)
+            continue
+
         nn_idx, one_sided = _knn_neighbors_against_ref(
             feats_ref, feats_all, ref_ids, query_ids, K_NEIGHBORS)
         pred_log = np.array([np.median(y_log_ref[nn_idx[i]]) for i in range(len(feats_all))])
@@ -374,7 +486,7 @@ def find_surface_anomalies(
         # Global robust-regression check -- catches corruption clustered in
         # feature space, which the local kNN check above can be fooled by
         # (a clustered row's own neighbours are mostly other corrupted rows).
-        global_out = _global_robust_residuals(feats_ref, y_log_ref, feats_all, y_log_all)
+        # The fit itself was already computed (and R^2-gated) above.
         if global_out is not None:
             global_resid, _ = global_out
             g_mad = float(np.median(np.abs(global_resid - np.median(global_resid))))

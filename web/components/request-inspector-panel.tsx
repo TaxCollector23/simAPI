@@ -178,7 +178,7 @@ export function RequestInspectorPanel({ runId, onBack }: { runId: string | null;
               {issues.map((i, idx) => (
                 <div key={idx} className="card p-4">
                   <div className="flex items-center gap-2">
-                    <span className={cn("rounded-full px-2 py-0.5 text-xs", i.status === "failed" ? "bg-fail/15 text-fail" : "bg-warn/15 text-warn")}>
+                    <span className={cn("rounded-full px-2 py-0.5 text-xs", i.status === "failed" ? "bg-fail/15 text-fail" : i.status === "info" ? "bg-sky-400/15 text-sky-300" : "bg-warn/15 text-warn")}>
                       {i.status}
                     </span>
                     <span className="text-sm text-white">{i.human_name ?? i.name}</span>

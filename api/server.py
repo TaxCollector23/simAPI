@@ -57,9 +57,12 @@ from core.ingestion import DataIngester
 from core.mesh_validator import MeshValidator, humanize_mesh_check_name, predict_corruption_risks
 from core.physics_validator import PhysicsValidator, SimulationType
 from core.repair import analyze as repair_analyze
-from core.robotics_validation import check_robotics_limits
+from core.report_export import to_junit_xml, to_sarif
+from core.robotics_engine import RoboticsValidationEngine
+from core.training_data_card import build_training_data_card
 
 API_VERSION = "3.1.0"
+ROBOTICS_ENGINE = RoboticsValidationEngine()
 
 app = FastAPI(
     title="SimAPI",
@@ -676,6 +679,7 @@ def _serialize_dimensional(report, df: pd.DataFrame, job_id: str, processing_ms:
         "checks_by_category": checks_by_category,
         "laws_confirmed": laws_confirmed,
         "training_suitability": training_suitability,
+        "surface_diagnostics": report.surface_diagnostics,
         "provenance": {
             "engine": "dimensional-analysis",
             "engine_version": "1.0",
@@ -688,6 +692,7 @@ def _serialize_dimensional(report, df: pd.DataFrame, job_id: str, processing_ms:
                                for c, u in report.units.columns.items()},
             "available_dimension_keys": ALL_DIMENSION_KEYS,
             "suppressions": list(report.suppressions),
+            "surface_diagnostics": report.surface_diagnostics,
             "inconsistent_rows": inconsistent,
             "unsuitable_for_training_rows": unsuitable,
             "known_impossible": KNOWN_IMPOSSIBLE,
@@ -884,7 +889,12 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     result = _serialize_dimensional(dim_report, df, jid, _dim_ms)
 
     if req.simulation_type == SimulationType.ROBOTICS:
-        robotics = check_robotics_limits(df, req.robotics_limits, source_rows=req.data, conditions=req.conditions)
+        robotics = ROBOTICS_ENGINE.validate(
+            df,
+            req.robotics_limits,
+            source_rows=req.data,
+            conditions=req.conditions,
+        )
         result = _merge_robotics_limits(result, robotics)
         result["validation_context"] = {"simulation_type": "robotics", "robotics_limits": req.robotics_limits, "conditions": req.conditions}
 
@@ -1015,6 +1025,15 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
 def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> dict[str, Any]:
     """Promote manipulation-arm limits into the verdict returned by every client."""
     checks = robotics["checks"]
+    # A missing optional signal/time axis means that specific check could not
+    # run. Report that limitation, but do not turn it into a failed training
+    # gate; configured limits for a missing signal remain real failures.
+    for check in checks:
+        if check.get("name", "").startswith("robotics_not_evaluated:") or (
+            check.get("status") == "warning"
+            and str(check.get("detail", "")).lower().startswith("not evaluated.")
+        ):
+            check["status"] = "info"
     result["robotics_checks"] = checks
     result["robotics_summary"] = robotics["summary"]
     evidence = robotics.get("evidence", {"entries": [], "total": 0, "truncated": False})
@@ -1024,17 +1043,20 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
     passed = sum(check["status"] == "passed" for check in checks)
     failed = sum(check["status"] == "failed" for check in checks)
     warnings = sum(check["status"] == "warning" for check in checks)
+    informational = sum(check["status"] == "info" for check in checks)
     result["all_checks"] += len(checks)
     result["unique_checks"] = result.get("unique_checks", result["all_checks"] - len(checks)) + len(checks)
     result["passed"] += passed
     result["failed"] += failed
     result["warnings"] += warnings
+    result["informational"] = result.get("informational", 0) + informational
     bucket = result.setdefault("checks_by_category", {}).setdefault(
         "robotics_limits", {"passed": 0, "warning": 0, "failed": 0}
     )
     bucket["passed"] += passed
     bucket["failed"] += failed
     bucket["warning"] += warnings
+    bucket["info"] = bucket.get("info", 0) + informational
 
     exclusions = result.setdefault("exclusions", [])
     seen = {item["trial_index"] for item in exclusions}
@@ -1151,6 +1173,44 @@ async def validate_physics_only(req: ValidateRequest, _: str = Depends(caller_id
     return await _validate_core(req)
 
 
+@app.post("/v1/validate/report", tags=["validation"])
+async def validate_report(
+    req: ValidateRequest,
+    format: str = Query(default="junit", description="Export format: junit, sarif, or card."),
+    strict_warnings: bool = Query(default=False),
+    dataset_name: str = Query(default=""),
+    _: str = Depends(caller_identity),
+):
+    """Validate once and export a CI report or a human-readable data card."""
+    export_format = format.strip().lower()
+    if export_format not in {"junit", "sarif", "card"}:
+        raise SimAPIError(
+            "Unsupported report format. Choose 'junit', 'sarif', or 'card'.",
+            code=ErrorCode.BAD_REQUEST,
+            details={"format": format, "allowed": ["junit", "sarif", "card"]},
+        )
+
+    # Keep report generation deterministic and prevent asynchronous AI work.
+    report = await _validate_core(req.model_copy(update={"run_ai": False, "deep_ai": False}))
+    report["domain"] = req.simulation_type.value
+    report["profile"] = "default"
+    report["surface_diagnostics"] = report.get("surface_diagnostics") or (
+        report.get("provenance", {}).get("surface_diagnostics", {})
+    )
+
+    if export_format == "junit":
+        return PlainTextResponse(
+            to_junit_xml(report, strict_warnings=strict_warnings),
+            media_type="application/xml",
+        )
+    if export_format == "sarif":
+        return JSONResponse(to_sarif(report, strict_warnings=strict_warnings))
+    return PlainTextResponse(
+        build_training_data_card(report, dataset_name=dataset_name),
+        media_type="text/markdown",
+    )
+
+
 @app.post("/v1/validate/dimensional", tags=["validation"])
 async def validate_dimensional(req: ValidateRequest, _: str = Depends(caller_identity)):
     """
@@ -1235,6 +1295,7 @@ async def validate_dimensional(req: ValidateRequest, _: str = Depends(caller_ide
              "row_ids": s.row_ids, "severity": s.severity}
             for s in report.suitability
         ],
+        "surface_diagnostics": report.surface_diagnostics,
         # Every suppression carries its reason: a validator that hides what it
         # chose not to run cannot be audited.
         "suppressions": list(report.suppressions),

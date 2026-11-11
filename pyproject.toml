@@ -17,6 +17,9 @@ dependencies = [
     "aiofiles>=23.0.0",
 ]
 
+[project.optional-dependencies]
+robotics-data = ["pyarrow", "rosbags", "huggingface-hub"]
+
 [project.urls]
 Homepage = "https://github.com/TaxCollector23/simAPI"
 

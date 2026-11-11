@@ -836,7 +836,7 @@ def compute_fingerprint(data: pd.DataFrame, domain: str,
         feats = [c for c in cols if c != tc][:6]
         if not feats: continue
         try:
-            idx = np.random.choice(n, min(n, 2000), replace=False)
+            idx = np.random.default_rng(42).choice(n, min(n, 2000), replace=False)
             y = data[tc].iloc[idx].fillna(0).values.astype(float)
             X = data[feats].iloc[idx].fillna(0).values.astype(float)
             mu_x2 = X.mean(0); sd_x2 = X.std(0); sd_x2[sd_x2==0]=1.0
@@ -1231,17 +1231,65 @@ class RowAnomalyScore:
     row_index: int; corruption_type: str; max_sigma: float
     check_scores: dict[str, float]; severity: str; diagnosis: str; n_checks: int = 1
 
+# ── Episode-awareness ────────────────────────────────────────────────────────
+# Robot-learning logs (LeRobot, DROID, BridgeData, RLDS exports) are sequences
+# of EPISODES concatenated row-wise: state resets to the episode start between
+# them, so consecutive rows that straddle a boundary are physically unrelated.
+# Any pair-diffusion check that treats the frame as one continuous run turns
+# every boundary into a "temporal coherence violation" and auto-excludes rows
+# that are perfectly clean. These column-name bases identify such a grouping
+# column; the match is deliberately conservative (exact base-name match plus
+# an integer-like sanity check), never substring-based.
+_EPISODE_NAME_BASES = {
+    "episode", "ep", "trial", "traj", "trajectory", "rollout", "segment",
+    "demo", "demonstration", "sequence", "seq", "run",
+}
+_EPISODE_NAME_SUFFIXES = ("_id", "_index", "_idx", "_num", "_number", "_no", "id")
+
+
+def _detect_episode_column(df: pd.DataFrame) -> str | None:
+    """Return the name of a column that groups rows into episodes/trials.
+
+    Requires an exact base-name match (``episode_id``, ``Trial Index``,
+    ``traj_num`` ...), at least 2 distinct values, and at most half the rows
+    distinct -- one row per group is a row index, not an episode grouping.
+    """
+    for col in df.columns:
+        cl = str(col).strip().lower()
+        base = cl
+        for suffix in _EPISODE_NAME_SUFFIXES:
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        if base not in _EPISODE_NAME_BASES:
+            continue
+        codes = pd.factorize(df[col])[0]
+        vals = codes[codes >= 0]
+        if len(vals) < max(2, 0.5 * len(df)):
+            continue
+        n_unique = len(np.unique(vals))
+        if 2 <= n_unique <= len(vals) / 2:
+            return col
+    return None
+
 class FilterBank:
     """Iterative cascade. Inlier set updated after each priority tier."""
 
     def __init__(self, data: pd.DataFrame, plan: TestPlan,
-                 prior_exclusions: set | None = None):
+                 prior_exclusions: set | None = None,
+                 episode_ids: np.ndarray | None = None):
         self.data = data.reset_index(drop=True)
         self.plan = plan; self.n = len(data)
         self.cols = set(data.columns)
         self.excl: set = set(prior_exclusions or set())
         self.scores: list[RowAnomalyScore] = []
         self._cache: dict[str, np.ndarray] = {}
+        # Positionally aligned group codes (one per row) when an episode-like
+        # column was detected upstream; pair-based checks stay WITHIN a group.
+        if episode_ids is not None and len(episode_ids) == self.n:
+            self.episode_ids = np.asarray(episode_ids)
+        else:
+            self.episode_ids = None
 
     def _arr(self, col: str) -> np.ndarray:
         if col not in self._cache:
@@ -1468,15 +1516,27 @@ class FilterBank:
         mah_sq = (za**2 - 2*corr*za*zb + zb**2) / (1-corr**2+1e-10)
         mah = np.where(valid, np.sqrt(np.maximum(mah_sq, 0)), 0.0)
         med_m, mad_m = self._mad(mah, inl)
+        # Corroborating-marginal guard (real-data FP class, measured on 19
+        # LeRobot datasets, Nov 2026): on real teleop/action logs the 2D
+        # cloud is heavy-tailed — mostly tiny corrections with occasional
+        # intentional flicks — so the robust ellipse baseline collapses and
+        # ordinary one-axis flicks score 60σ+ on Mahalanobis alone. A row may
+        # only be AUTO-EXCLUDED when it is ALSO extreme in at least one
+        # marginal (robust |z| >= threshold); ellipse-only suspects stay in
+        # the review queue. True corruption (unit errors, spikes) blows a
+        # marginal too, so detection power on planted faults is preserved.
+        med_a = float(np.median(a[inl])); med_b = float(np.median(b[inl]))
+        z_marg = np.maximum(np.abs(a - med_a) / sa, np.abs(b - med_b) / sb)
         for i in range(self.n):
             if not valid[i] or i in self.excl: continue
             sigma = (mah[i]-med_m)/(mad_m+1e-12)
             if sigma > thr:
-                self.excl.add(i)
+                corroborated = z_marg[i] >= thr
+                self.excl.add(i) if corroborated else None
                 self._flag(i, f"joint_{ca}_{cb}", sigma, "solver_divergence",
                            f"Joint outlier: {ca}={a[i]:.4g}, {cb}={b[i]:.4g} "
                            f"Mahalanobis {mah[i]:.1f} ({sigma:.1f}σ).",
-                           "critical" if sigma > 8 else "warning")
+                           "critical" if sigma > 8 and corroborated else "warning")
 
     # ── ensemble_predictor ─────────────────────────────────────────────────
     def _ensemble_predictor(self, p: dict):
@@ -1581,27 +1641,48 @@ class FilterBank:
             rel_diff = np.abs(a - b_block) / denom
             return (rel_diff < rel_tol).all(axis=1), rel_diff
 
-        # Forward scan
-        for i in range(self.n-window):
-            if i in self.excl: continue
-            close, rel_diff = _rel_close(X[i], X[i+1:i+1+window])
-            for j_off in np.where(close)[0]:
-                j = i+1+int(j_off)
-                if j not in self.excl:
-                    max_rel = float(rel_diff[j_off].max()); self.excl.add(j)
-                    self._flag(j, "copy_paste", (1-max_rel)*100, "copy_paste",
-                               f"Frozen/duplicated row: rel_diff={max_rel:.2e} to row {i}.", "critical")
-        # Backward scan (catches end-of-dataset duplicates)
-        if bidir:
-            for i in range(self.n-1, window-1, -1):
-                if i in self.excl: continue
-                close, rel_diff = _rel_close(X[i], X[max(0,i-window):i])
+        # Premise cap (real-data FP class, measured on uiuc_d3field, Nov 2026):
+        # static-scene robot logs produce NATURAL near-duplicates — a parked
+        # robot observed by a low-noise estimator repeats its state to <0.1%
+        # relative across many rows. That is stationarity, not copy-paste
+        # corruption. Real corruption rates at the row level are 1-3%; if this
+        # scan would exclude more than 5% of rows, the frozen-sweep premise
+        # ("duplicates are the exception") is wrong for this input — demote
+        # the whole scan to review-only. First pass counts, second pass flags.
+        def _scan():
+            hits: list[tuple[int, float, str]] = []
+            for i in range(self.n-window):
+                close, rel_diff = _rel_close(X[i], X[i+1:i+1+window])
                 for j_off in np.where(close)[0]:
-                    j = max(0,i-window) + int(j_off)
-                    if j != i and j not in self.excl:
-                        max_rel = float(rel_diff[j_off].max()); self.excl.add(j)
-                        self._flag(j, "copy_paste_bwd", (1-max_rel)*100, "copy_paste",
-                                   f"Frozen/duplicated row (bwd): rel_diff={max_rel:.2e} to row {i}.", "critical")
+                    j = i+1+int(j_off)
+                    max_rel = float(rel_diff[j_off].max())
+                    hits.append((j, max_rel, "copy_paste"))
+            if bidir:
+                for i in range(self.n-1, window-1, -1):
+                    close, rel_diff = _rel_close(X[i], X[max(0,i-window):i])
+                    for j_off in np.where(close)[0]:
+                        j = max(0,i-window) + int(j_off)
+                        if j != i:
+                            max_rel = float(rel_diff[j_off].max())
+                            hits.append((j, max_rel, "copy_paste_bwd"))
+            return hits
+
+        hits = _scan()
+        n_unique = len({j for j, _, _ in hits})
+        if n_unique > 0.05 * self.n:
+            for j, max_rel, kind in hits:
+                if j in self.excl: continue
+                self._flag(j, kind, (1-max_rel)*100, "copy_paste",
+                           f"Near-duplicate row (review-only: >5% of rows are "
+                           f"near-duplicates — stationary-signal regime): "
+                           f"rel_diff={max_rel:.2e}.", "warning")
+            return
+
+        for j, max_rel, kind in hits:
+            if j in self.excl: continue
+            self.excl.add(j)
+            self._flag(j, kind, (1-max_rel)*100, "copy_paste",
+                       f"Frozen/duplicated row: rel_diff={max_rel:.2e}.", "critical")
 
     # ── distribution_shift ─────────────────────────────────────────────────
     def _distribution_shift(self, p: dict):
@@ -1719,41 +1800,165 @@ class FilterBank:
                        if self.data[c].dtype.kind in ("f","i")][:8]
         if not columns or self.n < 10: return
 
+        # Episode awareness: a diff that straddles an episode boundary joins
+        # two unrelated trajectories. Cross-boundary positions are zeroed out
+        # of BOTH the baseline statistics and the spike test -- the boundary
+        # jump is where each episode resets, not a continuity violation.
+        same_ep: np.ndarray | None = None
+        if self.episode_ids is not None:
+            ep = self.episode_ids
+            same_ep = ep[1:] == ep[:-1]
+
         max_sigma = np.zeros(self.n)
+        max_jump_rel = np.zeros(self.n)
         for col in columns:
             if col not in self.cols: continue
             x = self._arr(col)
+            # Behavioral span (robust range): the absolute glitch bar is set
+            # against this, not std — std collapses on near-static segments
+            # and inflates on impact-heavy ones, while p99-p1 tracks the
+            # actual operating envelope of the signal.
+            x_span = max(float(np.percentile(x, 99) - np.percentile(x, 1)), 1e-9)
             diff = np.diff(x)
-            med_d = float(np.median(diff))
-            mad_d = float(np.median(np.abs(diff - med_d))) * 1.4826
-            if mad_d < 1e-10: continue
+            d_stat = diff[same_ep] if same_ep is not None else diff
+            if len(d_stat) == 0: continue
+            med_d = float(np.median(d_stat))
+            mad_d = float(np.median(np.abs(d_stat - med_d))) * 1.4826
+            # Degenerate-baseline guard: on near-static segments (teleop hold
+            # phases) the MAD of diffs can collapse to float noise (~1e-7 on
+            # columns whose std is ~0.05), making every micro-motion read as
+            # a 1000σ+ "spike" on clean human demonstrations. If the typical
+            # jump scale is below 0.1% of the column's spread, diffs carry no
+            # usable signal for spike detection — skip the column.
+            if mad_d < max(1e-10, 1e-3 * float(np.std(x))):
+                continue
             sigma_d = np.abs(diff - med_d) / mad_d
-            # TRUE SPIKE: require BOTH adjacent diffs to be anomalous.
-            # This prevents flagging clean rows that are merely adjacent to a corrupt row.
-            # A clean row X between [clean A] and [corrupt B]:
-            #   diff[A→X] is normal, diff[X→B] is large → only ONE side anomalous → NOT flagged.
-            # A corrupt row B between [clean A] and [clean C]:
-            #   diff[A→B] is large, diff[B→C] is large → BOTH sides anomalous → flagged.
+            if same_ep is not None:
+                sigma_d = np.where(same_ep, sigma_d, 0.0)
+            # TRUE SPIKE: require BOTH adjacent diffs to be anomalous AND in
+            # OPPOSITE directions relative to the typical motion (med_d).
+            #   * both-anomalous keeps clean rows adjacent to a corrupt row
+            #     out of the findings (one-sided evidence is not a spike);
+            #   * opposite-directions is what makes a spike a SPIKE: the value
+            #     jumps away from the trajectory and comes straight back. A
+            #     legitimate motion transient (start-up, or settle-move-settle
+            #     episodes) has same-sign diffs -- on mostly-static logs the
+            #     global MAD baseline is tiny, and without this condition
+            #     every motion segment reads as "anomalous jumps" (measured:
+            #     202 of 248 flags landed on clean rows of a benchmark arm
+            #     that parks at its goal between moves).
             spike_sigma = np.zeros(self.n)
-            for i in range(1, self.n - 1):
-                if sigma_d[i-1] > thr * 0.5 and sigma_d[i] > thr * 0.5:
-                    # Both neighbors show anomalous jumps -- this is a true spike
-                    spike_sigma[i] = max(sigma_d[i-1], sigma_d[i])
-            # Also flag the last row if its single incoming diff is extreme
-            if self.n > 1 and sigma_d[-1] > thr:
-                spike_sigma[-1] = sigma_d[-1]
+            spike_jump_rel = np.zeros(self.n)
+            anom = sigma_d > thr * 0.5
+            dirn = np.sign(diff - med_d)
+            # Vectorized spike test (exactly the loop below, unrolled): row i
+            # is a spike iff its two adjacent diffs are BOTH anomalous AND
+            # point in OPPOSITE directions -- the value jumps away from the
+            # trajectory and comes straight back.
+            #   * both-anomalous keeps clean rows adjacent to a corrupt row
+            #     out of the findings (one-sided evidence is not a spike);
+            #   * opposite-directions is what makes a spike a SPIKE. A
+            #     legitimate motion transient (start-up, or settle-move-settle
+            #     episodes) has same-sign diffs -- on mostly-static logs the
+            #     global MAD baseline is tiny, and without this condition
+            #     every motion segment reads as "anomalous jumps" (measured:
+            #     202 of 248 flags landed on clean rows of a benchmark arm
+            #     that parks at its goal between moves).
+            if self.n > 2:
+                core = anom[:-1] & anom[1:] & (dirn[:-1] * dirn[1:] < 0)
+                hit = np.where(core)[0] + 1  # row index i = left-diff index + 1
+                spike_sigma[hit] = np.maximum(sigma_d[:-1], sigma_d[1:])[core]
+                # Absolute-scale evidence against the behavioral span:
+                # sigma alone explodes when the MAD baseline is tiny, so a
+                # row may only be EXCLUDED when the single-frame jump is also
+                # a large fraction of the column's operating envelope.
+                # Micro-transients and gripper-contact snaps score huge sigma
+                # but small jump_rel; a planted teleport crosses half the span.
+                spike_jump_rel[hit] = np.maximum(np.abs(diff[:-1]), np.abs(diff[1:]))[core] / x_span
+            if self.episode_ids is not None:
+                # Warm-up mask: the first rows of an episode carry diff-derived
+                # quantities anchored at 0 (recorders without velocity sensors),
+                # so their first within-episode diffs are artifacts of the
+                # derivation, not spikes.
+                warm = np.zeros(self.n, dtype=bool)
+                for s in np.flatnonzero(np.r_[True, ep[1:] != ep[:-1]]):
+                    warm[s:s + 3] = True
+                spike_sigma[warm] = 0.0
+                spike_jump_rel[warm] = 0.0
             max_sigma = np.maximum(max_sigma, spike_sigma)
+            max_jump_rel = np.maximum(max_jump_rel, spike_jump_rel)
 
-        for i in range(self.n):
+        for i in np.where(max_sigma > thr)[0]:
             if i in self.excl: continue
-            if max_sigma[i] > thr:
-                self.excl.add(i)
-                self._flag(i, "temporal_coherence", float(max_sigma[i]),
+            # Precision-first exclusion policy: a row is auto-excluded only
+            # when the spike is unambiguous on BOTH scales — >20σ against the
+            # local diff baseline AND the single-frame jump exceeds twice the
+            # column's spread. Everything else stays in the review queue: on
+            # real teleop logs the sigma-only rule excluded ordinary human
+            # motion corrections (measured: 19 clean ALOHA rows, sigmas
+            # 22-2197 on near-static segments; velocity flicks up to ~1 std
+            # per frame are normal teleop behavior, a >=2-std single-frame
+            # excursion is a glitch signature, planted faults score 3-22x).
+            is_critical = max_sigma[i] > 20 and max_jump_rel[i] > 2.0
+            if is_critical:
+                self.excl.add(int(i))
+            self._flag(int(i), "temporal_coherence", float(max_sigma[i]),
+                       "solver_divergence",
+                       f"Temporal coherence violation at row {i}: "
+                       f"anomalous jump of {max_sigma[i]:.1f}σ vs neighbors. "
+                       "Possible sensor dropout, row scrambling, or splice artifact.",
+                       "critical" if is_critical else "warning")
+
+        # ── Sustained level-shift detector ────────────────────────────────
+        # A single-frame jump cannot separate real teleop flicks (measured:
+        # clean ALOHA flicks reach ~3x the column span) from planted
+        # teleports (~1.8x). The discriminator is PERSISTENCE: a corruption
+        # (teleport, unit-error burst, dropout hold) holds a wrong level for
+        # 4+ frames; real impulsive motion returns within 1-2 frames. Flag
+        # the first row of a held shift: level jumps >=2x the column span
+        # between a 4-frame pre-window and a 4-frame post-window.
+        for col in columns:
+            if col not in self.cols or self.n < 24:
+                continue
+            x = self._arr(col)
+            span = max(float(np.percentile(x, 99) - np.percentile(x, 1)), 1e-9)
+            if span < 1e-9:
+                continue
+            win = 4
+            sw = np.lib.stride_tricks.sliding_window_view(x, win)
+            med_win = np.median(sw, axis=1)      # len = n - win + 1; med_win[i] = median x[i:i+4]
+            # Entry transition at row i: level of the 4 frames STARTING at i
+            # vs the level of the 4 frames BEFORE i. A teleport/unit-error
+            # run holds the shifted level across the whole post window; a
+            # 1-2 frame flick barely moves the post median.
+            if len(med_win) < win + 1:
+                continue
+            dshift = np.abs(med_win[win:] - med_win[:len(med_win) - win])
+            for k in np.where(dshift > 1.2 * span)[0]:
+                i = int(k + win)  # first row of the new (wrong) level
+                if i >= self.n or i in self.excl:
+                    continue
+                if self.episode_ids is not None and not (
+                        self.episode_ids[i - 1] == self.episode_ids[i]
+                        == self.episode_ids[min(i + win, self.n - 1)]):
+                    continue  # shift straddles an episode boundary: reset, not corruption
+                # The wrong level must be HELD: the boundary value itself
+                # must have left the prior level by >=1x span. Real teleop
+                # flicks move the 4-frame median by ~0.05x span (measured),
+                # so a held median shift of >=1.2x span is corruption-grade.
+                pre_level = med_win[i - win]
+                if abs(x[i] - pre_level) < 1.0 * span:
+                    continue
+                sigma = float(dshift[k] / max(span, 1e-12) * 3.0)
+                self.excl.add(int(i))
+                self._flag(int(i), "temporal_level_shift", sigma,
                            "solver_divergence",
-                           f"Temporal coherence violation at row {i}: "
-                           f"anomalous jump of {max_sigma[i]:.1f}σ vs neighbors. "
-                           "Possible sensor dropout, row scrambling, or splice artifact.",
-                           "critical" if max_sigma[i] > 20 else "warning")
+                           f"Sustained level shift at row {i}: column {col} moves "
+                           f"{dshift[k]:.4g} into a held level {dshift[k] / span:.1f}x the "
+                           "column's operating span above its prior 4-frame median "
+                           "and does not return. Signature of a teleport, unit-error "
+                           "burst, or sensor dropout hold.",
+                           "critical")
 
     # ── quasi_constant_bounds ──────────────────────────────────────────────────
     def _quasi_constant_bounds(self, p: dict):
@@ -1782,17 +1987,43 @@ class FilterBank:
             cv = mad / abs(med)
             if cv > cv_threshold: continue  # not quasi-constant
 
-            # Flag rows deviating beyond n_sigma * MAD from inlier median
-            for i in range(self.n):
-                if i in self.excl or not np.isfinite(arr[i]): continue
-                sigma = abs(arr[i] - med) / mad
-                if sigma > n_sigma:
-                    self.excl.add(i)
-                    self._flag(i, f"qconst_{col}", sigma, "unit_conversion",
-                               f"Quasi-constant column {col}={arr[i]:.4g} deviates "
-                               f"{sigma:.1f}σ from dataset median {med:.4g}. "
-                               "Possible unit error or wrong test condition.",
-                               "critical")
+            # Real-signal guard (the FP class measured on 19 real LeRobot
+            # robot-learning datasets, Nov 2026): a joint that spends most of
+            # an episode parked or moving slowly has a tiny local MAD but a
+            # REAL operating envelope — within the episode it sweeps 10-1000x
+            # its hold-phase MAD, and natural micro-motion then reads as a
+            # 1000-20000σ "unit error". A fixed simulation parameter never
+            # leaves its noise band: its total span stays on the order of its
+            # MAD. So: if the column's robust span is much wider than its MAD,
+            # it is a trajectory signal, not a parameter — skip it entirely.
+            span = float(np.percentile(arr, 99) - np.percentile(arr, 1))
+            if span > 10.0 * mad:
+                continue
+
+            # Absolute floor: even for a genuine parameter, the deviation must
+            # also clear 5% of the column's span — protects against a parameter
+            # with a small but non-noise spread (float formatting, export
+            # rounding) where MAD alone collapses to quantization noise.
+            floor = max(n_sigma * mad, 0.05 * span)
+
+            # Premise cap: if more than 1% of rows would be flagged, the
+            # "fixed parameter" premise is wrong by construction (real
+            # corruption rates at the row level are 1-3% and do not concentrate
+            # in ONE column; a slow joint's drift does). Demote to no action.
+            dev = np.abs(arr - med)
+            n_exceed = int(np.sum(np.isfinite(arr) & (dev > floor)))
+            if n_exceed > 0.01 * self.n:
+                continue
+
+            for i in np.where(np.isfinite(arr) & (dev > floor))[0]:
+                if i in self.excl: continue
+                sigma = float(dev[i] / mad)
+                self.excl.add(int(i))
+                self._flag(int(i), f"qconst_{col}", sigma, "unit_conversion",
+                           f"Quasi-constant column {col}={arr[i]:.4g} deviates "
+                           f"{sigma:.1f}σ from dataset median {med:.4g}. "
+                           "Possible unit error or wrong test condition.",
+                           "critical")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LAYER 4: Confidence Calibrator
@@ -1880,6 +2111,98 @@ class APIEResult:
     diagnosis: Any | None = None   # CausalDiagnosis result
     manifold: Any | None = None    # PhysicsManifold result
 
+# ── Layer 6: Recording continuity (added after the real-data case study) ──────
+# Community teleop logs contain faults the hardened marginal and manifold
+# checks are DELIBERATELY blind to: parked arms, dead channels and limit
+# saturation are normal robot behaviour (quasi-constant guard), so the
+# remaining wild-data fault classes are recording-level:
+#   (a) timestamp discontinuity     : dt <= 0 or dt > 5x median dt
+#   (b) command-response decoupling : whole state bit-frozen >= 1s while the
+#       commanded action vector keeps varying
+#   (c) pose teleport               : |dq/dt| beyond servo no-load speed
+# Findings go to REVIEW ONLY (never auto-excluded), consistent with the
+# false-positive contract: recording faults deserve human confirmation.
+def _recording_continuity_flags(data, already_excluded):
+    try:
+        if "t" not in data.columns:
+            return []
+        t = data["t"].to_numpy(dtype=float)
+        pos_cols = [c for c in data.columns if c.endswith("_position")]
+        act_cols = [c for c in data.columns if c.startswith("action_")]
+        if not pos_cols or not act_cols or len(t) < 30:
+            return []
+        P = data[pos_cols].to_numpy(dtype=float)
+        A = data[act_cols].to_numpy(dtype=float)
+        n = len(P)
+        out = []
+
+        def _flag(rows, ctype, severity, diag):
+            sigma = 99.0 if severity == "critical" else 20.0
+            for i in rows:
+                if i in already_excluded:
+                    continue
+                out.append({
+                    "row_index": int(i), "max_sigma": sigma,
+                    "checks": ["recording_continuity"],
+                    "corruption_type": ctype, "severity": severity,
+                    "diagnosis": diag, "reconstructed_values": None,
+                })
+
+        # (a) timestamp discontinuities: clock resets, dropped/batched frames
+        dt = np.diff(t)
+        pos_dt = dt[dt > 1e-9]
+        if pos_dt.size:
+            med = float(np.median(pos_dt))
+            bad = np.flatnonzero((dt <= 1e-9) | (dt > 5.0 * med))[:2000]
+            for i in bad:
+                _flag([i, i + 1], "timestamp_discontinuity", "critical",
+                      f"dt={dt[i]:.4f}s vs median {med:.4f}s: dropped frames or clock reset")
+
+        # unit scale from joint ranges (degrees vs radians)
+        rng = np.nanmax(P, axis=0) - np.nanmin(P, axis=0)
+        is_deg = bool(np.nanmax(rng) > 30.0)
+        vcap = 400.0 if is_deg else 400.0 * np.pi / 180.0
+        unit = "deg" if is_deg else "rad"
+
+        # (c) pose teleports across a positive dt
+        if pos_dt.size:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                v = np.abs(np.diff(P, axis=0)) / dt[:, None]
+            bad = np.flatnonzero((dt > 1e-9) & (np.nanmax(v, axis=1) > vcap))[:2000]
+            for i in bad:
+                _flag([i, i + 1], "pose_teleport", "critical",
+                      f"|dq/dt| peak {float(np.nanmax(v[i])):.1f} {unit}/s exceeds "
+                      f"servo no-load speed ({vcap:.0f})")
+
+        # (b) command-response decoupling: whole state frozen >= 1s, action varies
+        avar_thr = 1.0 if is_deg else np.pi / 180.0
+        eq = np.zeros(n, dtype=bool)
+        if n > 1:
+            eq[1:] = (P[1:] == P[:-1]).all(axis=1)
+        start = None
+        for i in range(n + 1):
+            if i < n and eq[i]:
+                if start is None:
+                    start = i
+                continue
+            if start is not None:
+                a, b = start, i                      # identical block: rows a-1..b
+                hi = min(b + 1, n)
+                dur = float(t[min(b, n - 1)] - t[max(a - 1, 0)])
+                if dur >= 1.0 and a > 15:
+                    w = slice(max(0, a - 2), min(n, b + 3))
+                    avar = float(np.max(np.abs(np.diff(A[w], axis=0)))) if w.stop - w.start > 1 else 0.0
+                    if avar > avar_thr:
+                        _flag(list(range(max(a - 1, 0), hi)), "command_response_decoupling",
+                              "warning",
+                              f"state bit-frozen {dur:.1f}s while action varied {avar:.2f} "
+                              f"{unit}: rig disconnected or follower unpowered")
+                start = None
+        return out
+    except Exception:
+        return []
+
+
 class AdaptivePhysicsIntelligenceEngine:
     """
     APIE v3.0 — Five-layer physics reasoning engine.
@@ -1895,6 +2218,16 @@ class AdaptivePhysicsIntelligenceEngine:
         t0 = time.time()
         if isinstance(data, list): data = pd.DataFrame(data)
         data = data.reset_index(drop=True)
+        # Detect the episode grouping BEFORE numeric coercion (ids may be
+        # strings); factorize keeps positional alignment through the renames
+        # and coercions below.
+        _ep_col = _detect_episode_column(data)
+        episode_ids: np.ndarray | None = None
+        if _ep_col is not None:
+            try:
+                episode_ids = pd.factorize(data[_ep_col])[0].astype(np.int64)
+            except Exception:
+                episode_ids = None
         for col in data.columns:
             data[col] = pd.to_numeric(data[col], errors="coerce")
 
@@ -1919,7 +2252,8 @@ class AdaptivePhysicsIntelligenceEngine:
         plan = orchestrate(fp, profile, conditions)
 
         # L3: Filter Bank (runs first, on the raw data)
-        bank = FilterBank(data, plan, prior_exclusions=set())
+        bank = FilterBank(data, plan, prior_exclusions=set(),
+                          episode_ids=episode_ids)
         raw_excl, scores = bank.run()
 
         # L4: Confidence calibrator
@@ -2030,6 +2364,12 @@ class AdaptivePhysicsIntelligenceEngine:
                         'reconstructed_values': f.get('reconstructed_values'),
                     })
         review_flags = _apie_review + _mfd_review
+
+        # Layer 6: recording-continuity review flags (wild-data blind-spot fix)
+        try:
+            review_flags = review_flags + _recording_continuity_flags(data, final_excl)
+        except Exception:
+            pass
 
         # ── Causal Diagnosis ───────────────────────────────────────────────
         diagnosis = None

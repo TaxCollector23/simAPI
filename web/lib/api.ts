@@ -20,7 +20,7 @@ export interface ValidationRequest {
 export interface Issue {
   name: string;
   human_name: string;
-  status: "warning" | "failed";
+  status: "info" | "warning" | "failed";
   description: string;
   detail: string;
   value: number | null;
@@ -79,7 +79,7 @@ export interface ValidationResult {
   robotics_evidence_truncated?: boolean;
   validation_context?: { simulation_type: string; robotics_limits: Record<string, [number, number]>; conditions: Record<string, number> };
   robotics_summary?: RoboticsSummary;
-  robotics_checks?: { name: string; status: "passed" | "warning" | "failed"; detail: string; violations: number }[];
+  robotics_checks?: { name: string; status: "info" | "passed" | "warning" | "failed"; detail: string; violations: number }[];
   job_id: string;
   status: "passed" | "warning" | "failed";
   confidence: "high" | "medium" | "low";
@@ -96,11 +96,12 @@ export interface ValidationResult {
   passed: number;
   warnings: number;
   failed: number;
+  informational?: number;
   issues: Issue[];
   exclusions: Exclusion[];
   statistics: Record<string, Stat>;
   statistics_plain?: string[];
-  checks_by_category: Record<string, { passed: number; warning: number; failed: number }>;
+  checks_by_category: Record<string, { passed: number; warning: number; failed: number; info?: number }>;
   columns_renamed: Record<string, string>;
   ai: AIResult | null;
   ai_status: string;

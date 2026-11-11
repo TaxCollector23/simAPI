@@ -86,7 +86,7 @@ _PATTERNS: list[tuple[str, str, float]] = [
     (r"^p(_(static|total|stag|inf|infty|abs|gauge))?$|^pressure(_\w+)?$",
      "pressure", 0.85),
     (r"^dynamic_pressure$|^q_?inf$", "pressure", 0.85),
-    (r"^t(_(static|total|stag|inf|infty|wall))?$|^temp(erature)?(_\w+)?$",
+    (r"^t_(static|total|stag|inf|infty|wall)$|^temp(erature)?(_\w+)?$",
      "temperature", 0.75),
     (r"^rho(_(inf|infty|static))?$|^density(_\w+)?$", "density", 0.85),
     (r"^(dynamic_)?viscosity(_\w+)?$", "dynamic_viscosity", 0.8),
@@ -159,6 +159,7 @@ _SUFFIX_ALIASES = {"feet": "ft", "in": "inch", "kts": "knot"}
 # ordered patterns find nothing, so it never overrides a precise match.
 _TOKEN_DIMENSION_MAP: dict[str, tuple[str, float]] = {
     "velocity": ("velocity", 0.65), "speed": ("velocity", 0.65),
+    "t": ("time", 0.7), "time": ("time", 0.8), "timestamp": ("time", 0.8),
     "acceleration": ("acceleration", 0.65), "accel": ("acceleration", 0.65),
     "pressure": ("pressure", 0.65), "temperature": ("temperature", 0.6), "temp": ("temperature", 0.55),
     "density": ("density", 0.65), "viscosity": ("dynamic_viscosity", 0.6),
@@ -172,7 +173,7 @@ _TOKEN_DIMENSION_MAP: dict[str, tuple[str, float]] = {
     "depth": ("length", 0.55), "distance": ("length", 0.55), "displacement": ("length", 0.5),
     "range": ("length", 0.5), "radius": ("length", 0.55), "diameter": ("length", 0.55),
     "chord": ("length", 0.55), "span": ("length", 0.55), "altitude": ("length", 0.6), "elevation": ("length", 0.55),
-    "time": ("time", 0.6), "duration": ("time", 0.55), "period": ("time", 0.55),
+    "duration": ("time", 0.55), "period": ("time", 0.55),
     "energy": ("energy", 0.55), "enthalpy": ("energy", 0.55), "power": ("power", 0.6),
     "frequency": ("frequency", 0.6), "freq": ("frequency", 0.55),
     "angle": ("angle", 0.55), "voltage": ("voltage", 0.6), "current": ("current", 0.45),
