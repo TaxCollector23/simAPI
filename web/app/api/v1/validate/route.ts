@@ -3,6 +3,7 @@ import { canonical, roboticsEvidenceLimits, type SimulationType } from "@/lib/va
 import { buildEvidence } from "@/lib/robotics-workflow.js";
 import { richValidate } from "@/lib/rich-validate";
 import { aiReview, type AiReview } from "@/lib/ai-review";
+import { validateFtcLog, type FtcLimits } from "@/lib/ftc-frc.js";
 
 /**
  * POST /api/v1/validate
@@ -19,6 +20,9 @@ interface ValidateBody {
   simulation_type?: SimulationType;
   conditions?: Record<string, number>;
   robotics_limits?: Record<string, [number, number]>;
+  robotics_profile?: string;
+  ftc_limits?: Record<string, number | [number, number]>;
+  units?: Record<string, string>;
   run_ai?: boolean;
   job_id?: string;
 }
@@ -124,6 +128,84 @@ function pearson(a: number[], b: number[]): number {
   return da && db ? num / Math.sqrt(da * db) : NaN;
 }
 
+function mapFtcReport(report: ReturnType<typeof validateFtcLog>, rows: Record<string, unknown>[], jobId: string) {
+  const failed = report.failed_checks.map((check) => ({
+    name: `ftc_frc:${check.name}`,
+    human_name: check.name.replaceAll("_", " "),
+    status: "failed" as const,
+    description: `FTC/FRC check ${check.name}`,
+    detail: check.detail,
+    value: null,
+    category: "ftc_frc",
+  }));
+  const warned = report.warnings.map((check) => ({
+    name: `ftc_frc:${check.name}`,
+    human_name: check.name.replaceAll("_", " "),
+    status: "warning" as const,
+    description: `FTC/FRC check ${check.name}`,
+    detail: check.detail,
+    value: null,
+    category: "ftc_frc",
+  }));
+  const issues = [...failed, ...warned];
+  const exclusions = Object.entries(report.excluded_rows).map(([rawIndex, reasons]) => {
+    const trial_index = Number(rawIndex);
+    return { trial_index, trial_number: trial_index + 1, reason: reasons.join("; "), severity: "critical" };
+  });
+  const excluded = exclusions.length;
+  const warnings = warned.length;
+  const failedCount = failed.length;
+  const status = failedCount ? "failed" : warnings ? "warning" : "passed";
+  const allChecks = Math.max(1, issues.length);
+  const roboticsChecks = issues.map((issue) => ({
+    name: issue.name,
+    column: issue.name.slice("ftc_frc:".length),
+    status: issue.status,
+    detail: issue.detail,
+    violations: 1,
+  }));
+  const timeColumn = ["time", "t", "timestamp", "elapsed_time"].find((key) => rows.some((row) => key in row)) ?? null;
+  const episodeColumn = ["episode_id", "episode", "match", "segment"].find((key) => rows.some((row) => key in row)) ?? null;
+  return {
+    job_id: jobId,
+    status,
+    confidence: failedCount ? "low" : warnings ? "medium" : "high",
+    plain_summary: failedCount
+      ? `FTC/FRC validation found ${failedCount} failing check(s) across ${rows.length} samples.`
+      : warnings
+        ? `FTC/FRC validation found ${warnings} warning(s) across ${rows.length} samples.`
+        : `All ${rows.length} samples passed the FTC/FRC checks.`,
+    trials_submitted: rows.length,
+    trials_valid: Math.max(0, rows.length - excluded),
+    trials_excluded: excluded,
+    exclusion_rate: rows.length ? excluded / rows.length : 0,
+    training_ready: failedCount === 0 && excluded === 0,
+    processing_ms: 0,
+    all_checks: allChecks,
+    unique_checks: allChecks,
+    passed: allChecks - failedCount - warnings,
+    warnings,
+    failed: failedCount,
+    informational: 0,
+    issues,
+    physics_checks: issues,
+    exclusions,
+    statistics: {},
+    checks_by_category: { ftc_frc: { passed: allChecks - failedCount - warnings, warning: warnings, failed: failedCount } },
+    columns_renamed: {},
+    robotics_checks: roboticsChecks,
+    robotics_summary: {
+      engine_version: "ftc-frc-1",
+      episodes: report.episodes,
+      time_column: timeColumn,
+      episode_column: episodeColumn,
+      assumptions: ["Motor power is bounded to the configured range.", "Heading wraps through +/-180 degrees before jump checks."],
+      profile: "FTC / FRC",
+      ftc_summary: report.summary,
+    },
+  };
+}
+
 export async function POST(req: Request) {
   const requestId = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
 
@@ -135,6 +217,7 @@ export async function POST(req: Request) {
   }
 
   const simType = (body.simulation_type ?? "aerodynamics") as SimulationType;
+  if (body.robotics_profile?.toLowerCase() === "frc") body.robotics_profile = "ftc";
   const rows = Array.isArray(body.data) ? body.data : [];
   if (rows.length === 0) {
     return NextResponse.json(errorBody("bad_request", "`data` must be a non-empty array of trial records.", requestId), { status: 400 });
@@ -147,6 +230,24 @@ export async function POST(req: Request) {
   }
   if (rows.length > 10000) {
     return NextResponse.json(errorBody("payload_too_large", "Maximum 10,000 trials per request.", requestId), { status: 413 });
+  }
+  if (body.robotics_profile !== undefined && !["robotics", "ftc"].includes(body.robotics_profile)) {
+    return NextResponse.json(errorBody("bad_request", "robotics_profile must be 'robotics' or 'ftc'.", requestId), { status: 400 });
+  }
+  if (body.robotics_profile === "ftc" && simType !== "robotics") {
+    return NextResponse.json(errorBody("bad_request", "The FTC/FRC profile requires simulation_type 'robotics'.", requestId), { status: 400 });
+  }
+  if (body.ftc_limits !== undefined) {
+    const known = new Set(["motor_power", "battery_voltage", "battery_sag_voltage", "sag_min_total_power", "velocity_tolerance", "min_moving_speed", "max_speed", "heading_jump_deg"]);
+    const invalid = !body.ftc_limits || typeof body.ftc_limits !== "object" || Array.isArray(body.ftc_limits) || Object.entries(body.ftc_limits).some(([key, value]) => {
+      if (!known.has(key)) return true;
+      if (key === "motor_power" || key === "battery_voltage") return !Array.isArray(value) || value.length !== 2 || !value.every((n) => typeof n === "number" && Number.isFinite(n)) || value[0] >= value[1];
+      return typeof value !== "number" || !Number.isFinite(value) || value < 0;
+    });
+    if (invalid) return NextResponse.json(errorBody("bad_request", "ftc_limits contains an invalid or unknown FTC/FRC limit.", requestId), { status: 400 });
+  }
+  if (body.units !== undefined && (!body.units || typeof body.units !== "object" || Array.isArray(body.units) || Object.values(body.units).some((unit) => typeof unit !== "string"))) {
+    return NextResponse.json(errorBody("bad_request", "units must map signal names to unit strings.", requestId), { status: 400 });
   }
   if (body.robotics_limits !== undefined) {
     if (simType !== "robotics" || !body.robotics_limits || typeof body.robotics_limits !== "object" || Array.isArray(body.robotics_limits)) {
@@ -183,6 +284,9 @@ export async function POST(req: Request) {
           simulation_type: simType,
           conditions: body.conditions ?? {},
           robotics_limits: body.robotics_limits ?? {},
+          ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}),
+          ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}),
+          ...(body.units ? { units: body.units } : {}),
           run_ai: body.run_ai ?? true,
         }),
         signal: AbortSignal.timeout(35_000),
@@ -222,13 +326,19 @@ export async function POST(req: Request) {
           robotics_summary: pyResult.robotics_summary,
         };
       } else {
-        result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
+        result = body.robotics_profile === "ftc"
+          ? mapFtcReport(validateFtcLog(rows, (body.ftc_limits ?? {}) as Partial<FtcLimits>), rows, requestId.slice(0, 8))
+          : richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
       }
     } catch {
-      result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
+      result = body.robotics_profile === "ftc"
+        ? mapFtcReport(validateFtcLog(rows, (body.ftc_limits ?? {}) as Partial<FtcLimits>), rows, requestId.slice(0, 8))
+        : richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
     }
   } else {
-    result = richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
+    result = body.robotics_profile === "ftc"
+      ? mapFtcReport(validateFtcLog(rows, (body.ftc_limits ?? {}) as Partial<FtcLimits>), rows, requestId.slice(0, 8))
+      : richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
   }
 
   const excludedIdx = new Set(result.exclusions.map((e: { trial_index: number }) => e.trial_index));
@@ -278,9 +388,11 @@ export async function POST(req: Request) {
   return NextResponse.json(
     {
       ...result,
-      validation_context: { simulation_type: simType, robotics_limits: body.robotics_limits ?? {}, conditions: body.conditions ?? {} },
+      validation_context: { simulation_type: simType, robotics_limits: body.robotics_limits ?? {}, conditions: body.conditions ?? {}, ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}), ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}), ...(body.units ? { units: body.units } : {}) },
       ...(evidence ? { robotics_evidence: evidence.entries, robotics_evidence_total: evidence.total, robotics_evidence_truncated: evidence.truncated } : {}),
-      engine: engineSource === "python" ? "python-dimensional" : simType === "robotics" ? "typescript-manipulation-2" : "typescript-20-checks",
+      engine: body.robotics_profile === "ftc"
+        ? (engineSource === "python" ? "python-ftc-frc-1" : "typescript-ftc-frc-1")
+        : engineSource === "python" ? "python-dimensional" : simType === "robotics" ? "typescript-manipulation-2" : "typescript-20-checks",
       python_backend: engineSource === "python",
       ai: mapAi(review),
       ai_status: review.enabled ? (review.error ? "error" : "completed") : "disabled",
