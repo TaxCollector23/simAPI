@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from core.robotics_trajectory import analyze_trajectories as analyze_vectorized  # noqa: E402
 
 BASELINE_REVISION = os.environ.get(
-    "SIMAPI_TRAJECTORY_BASELINE", "7a9d5c39c64b32926006f46c69f3ea9f38998aeb"
+    "SIMAPI_TRAJECTORY_BASELINE", "7a9d5c3"
 )
 DEFAULT_ROWS = 200_000
 DEFAULT_JOINTS = 6
