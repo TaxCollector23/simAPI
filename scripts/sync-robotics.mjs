@@ -4,6 +4,8 @@ for (const name of [
   "robotics-workflow.d.ts",
   "robotics-import.js",
   "robotics-import.d.ts",
+  "ftc-frc.js",
+  "ftc-frc.d.ts",
 ]) {
   await copyFile(
     new URL(`../sdk-node/lib/${name}`, import.meta.url),
