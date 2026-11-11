@@ -545,11 +545,17 @@ async function runValidation(file, key, args) {
   if (args.json) stdout.write(JSON.stringify(r, null, 2) + "\n");
   else if (args.summary || args.format === "github" || env.CI) {
     stdout.write(`${r.status.toUpperCase()}  ${file}  ${r.trials_submitted ?? "?"} samples, ${r.trials_excluded ?? "?"} excluded, ${r.failed ?? "?"} failed checks, ${r.warnings ?? "?"} warnings\n`);
+    printRoboticsWarnings(r);
     for (const issue of (r.issues || []).slice(0, 3)) stdout.write(`  ${issue.human_name || issue.name}: ${issue.detail || ""}\n`);
   } else renderReport(r, file, body.simulation_type);
 
   if (args["fail-on"] === "warning" && r.status !== "passed") process.exitCode = 1;
   if (args["fail-on"] === "failed" && r.status === "failed") process.exitCode = 1;
+}
+
+function printRoboticsWarnings(r) {
+  const warnings = r.robotics_warnings || r.screening_warnings || r.robotics_summary?.screening_warnings || [];
+  for (const warning of warnings) stdout.write(`  ${c.amber("⚠")} ${warning}\n`);
 }
 
 function renderReport(r, file, simType) {
@@ -574,7 +580,9 @@ function renderReport(r, file, simType) {
   if (r.robotics_summary) {
     row("Motion engine", r.robotics_summary.engine_version);
     row("Episodes", String(r.robotics_summary.episodes.length));
+    if (r.robotics_summary.limits_source) row("Joint limits", r.robotics_summary.limits_source);
   }
+  printRoboticsWarnings(r);
   row("Trials", `${c.bold(String(r.trials_valid ?? "—"))} valid / ${r.trials_submitted ?? "—"}` + (excl ? c.dim(`   (${excl} excluded)`) : ""));
   row("Rules", `${r.unique_checks ?? r.all_checks ?? "—"} unique` + c.dim(`   ·  ${(r.all_checks ?? 0).toLocaleString()} evaluations`));
   row("Findings", `${failures ? c.red(failures + " failed") : "0 failed"}   ${warns ? c.amber(warns + " warnings") : "0 warnings"}`);
