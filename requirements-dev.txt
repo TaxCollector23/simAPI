@@ -7,3 +7,6 @@ ruff>=0.6.0
 mypy>=1.11.0
 pre-commit>=3.8.0
 scikit-learn>=1.4
+mcp<2
+# Used only to create the small parquet fixture in the MCP upload tests.
+pyarrow

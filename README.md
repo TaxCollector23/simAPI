@@ -253,6 +253,50 @@ per-signal statistics. The Node.js SDK accepts the same limits as
 `roboticsLimits` in its validation options. See the [API quickstart](https://simapilander.vercel.app/docs/quickstart)
 and [CLI guide](https://simapilander.vercel.app/docs/sdks/cli).
 
+## MCP server
+
+`simapi_mcp.py` exposes the robotics checks to MCP clients. Install the
+optional SDK dependency with `pip install "mcp<2"`. Local stdio mode keeps
+using the caller's local files:
+
+```bash
+SIMAPI_PATH=/path/to/simAPI python simapi_mcp.py
+```
+
+Streamable HTTP mode requires at least one bearer token before it starts.
+Keep keys in the process environment or a secrets manager; do not commit them
+to the repository. Multiple keys may be comma separated.
+
+```bash
+SIMAPI_MCP_TRANSPORT=streamable-http \
+SIMAPI_MCP_API_KEYS="$SIMAPI_MCP_KEY" \
+SIMAPI_MCP_RATE_LIMIT=60 \
+SIMAPI_MCP_MAX_ROWS=10000 \
+SIMAPI_MCP_HOST=0.0.0.0 \
+SIMAPI_MCP_ALLOWED_HOSTS="mcp.example.com:*" \
+SIMAPI_PATH=/path/to/simAPI \
+python simapi_mcp.py
+```
+
+Every HTTP request needs `Authorization: Bearer <token>`. Each token gets a
+fixed 60-second request window; requests over `SIMAPI_MCP_RATE_LIMIT` receive
+HTTP 429 and a `Retry-After` header. Rate counters are held in process memory,
+so run one server process per deployment unless you add a shared limiter.
+The server binds to `127.0.0.1` by default; set `SIMAPI_MCP_HOST=0.0.0.0`
+behind a TLS terminating reverse proxy when remote clients need to connect.
+Set `SIMAPI_MCP_ALLOWED_HOSTS` to the public hostnames and ports served by the
+proxy. Browser based MCP clients can also set `SIMAPI_MCP_ALLOWED_ORIGINS`;
+the SDK keeps its local-only defaults when these allowlists are unset.
+The episode, CSV, and clean-episode tools reject more than
+`SIMAPI_MCP_MAX_ROWS` rows (default 10,000) instead of truncating them.
+
+Local file paths are disabled for `validate_recording` in HTTP mode. Use
+`validate_recording_upload` with base64 file content and a filename. Accepted
+`.parquet`, `.db3`, `.mcap`, and `.zip` files are written to a private
+temporary directory and removed after validation. The HTTP upload is capped
+at 3 MiB to fit the MCP SDK's default request-body limit. Stdio mode remains
+local and does not require a key.
+
 ## Current scope
 
 The hosted validator accepts tabular numeric records. Robotics limit checks are
