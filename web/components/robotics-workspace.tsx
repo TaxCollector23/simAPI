@@ -17,10 +17,12 @@ import {
   type Row,
 } from "@/lib/robotics-workflow.js";
 import type { Recording } from "@/lib/robotics-import.js";
+import { FTC_DEFAULT_LIMITS, FTC_PROFILE } from "@/lib/ftc-frc.js";
 import { RoboticsRunReport } from "./robotics-run-report";
 import { TrajectoryExplorer } from "./trajectory-explorer";
 
 type Limit = { signal: string; min: string; max: string };
+type FtcLimit = number | [number, number];
 const PROFILE_KEY = "simapi.robotics.profiles.v1";
 const options = [
   { key: "max_time_step", label: "Maximum sample interval", unit: "s" },
@@ -68,6 +70,44 @@ function draftLimits(drafts: Limit[]) {
   return Object.fromEntries(entries);
 }
 
+function FtcLimitsEditor({
+  limits,
+  onChange,
+}: {
+  limits: Record<string, FtcLimit>;
+  onChange: (value: Record<string, FtcLimit>) => void;
+}) {
+  const labels: Record<string, string> = {
+    motor_power: "Motor power range",
+    battery_voltage: "Battery voltage warning band (V)",
+    battery_sag_voltage: "Battery sag threshold (V)",
+    sag_min_total_power: "Total power for sag detection",
+    velocity_tolerance: "Encoder velocity tolerance (ticks/s)",
+    min_moving_speed: "Minimum moving speed (ticks/s)",
+    max_speed: "Maximum odometry speed (units/s)",
+    heading_jump_deg: "Maximum unwrapped heading step (degrees)",
+  };
+  return (
+    <fieldset className="mt-6 space-y-4">
+      <legend className="mb-4 text-base font-medium">FTC / FRC limits</legend>
+      {Object.entries(limits).map(([key, value]) => (
+        <label key={key} className="flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span>{labels[key] ?? key}</span>
+          {Array.isArray(value) ? (
+            <span className="flex items-center gap-2">
+              <input aria-label={`${labels[key]} minimum`} type="number" step="any" value={value[0]} onChange={(e) => onChange({ ...limits, [key]: [Number(e.target.value), value[1]] })} />
+              <span>to</span>
+              <input aria-label={`${labels[key]} maximum`} type="number" step="any" value={value[1]} onChange={(e) => onChange({ ...limits, [key]: [value[0], Number(e.target.value)] })} />
+            </span>
+          ) : (
+            <input aria-label={labels[key] ?? key} className="w-28" type="number" min="0" step="any" value={value} onChange={(e) => onChange({ ...limits, [key]: Number(e.target.value) })} />
+          )}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 export function RoboticsWorkspace({
   example,
   onOtherDomain,
@@ -83,7 +123,9 @@ export function RoboticsWorkspace({
     [pending, setPending] = useState<{ rows: Row[]; source: string } | null>(
       null,
     );
-  const [limits, setLimits] = useState<Limit[]>([]),
+  const [profileKind, setProfileKind] = useState<"robotics" | "ftc">("robotics"),
+    [ftcLimits, setFtcLimits] = useState<Record<string, FtcLimit>>(() => structuredClone(FTC_DEFAULT_LIMITS)),
+    [limits, setLimits] = useState<Limit[]>([]),
     [conditions, setConditions] = useState<Record<string, number>>({}),
     [metadata, setMetadata] = useState<Partial<Profile>>({}),
     [name, setName] = useState("Arm profile");
@@ -145,11 +187,16 @@ export function RoboticsWorkspace({
       ...metadata,
       name,
       schema_version: 1,
-      robotics_limits: draftLimits(limits),
+      robotics_profile: profileKind,
+      ...(profileKind === "ftc" ? { ftc_limits: ftcLimits } : {}),
+      robotics_limits: profileKind === "ftc" ? {} : draftLimits(limits),
       conditions,
     });
   }
   function applyProfile(profile: Profile) {
+    const nextKind = profile.robotics_profile === "ftc" ? "ftc" : "robotics";
+    setProfileKind(nextKind);
+    setFtcLimits({ ...structuredClone(FTC_DEFAULT_LIMITS), ...(profile.ftc_limits || {}) });
     setName(profile.name);
     setLimits(
       Object.entries(profile.robotics_limits).map(([signal, range]) => ({
@@ -237,6 +284,8 @@ export function RoboticsWorkspace({
           simulation_type: "robotics",
           conditions: profile.conditions,
           robotics_limits: profile.robotics_limits,
+          ...(profile.robotics_profile === "ftc" ? { robotics_profile: "ftc", ftc_limits: profile.ftc_limits } : {}),
+          ...(profile.units ? { units: profile.units } : {}),
           run_ai: false,
         },
         DEMO_KEY,
@@ -440,7 +489,32 @@ export function RoboticsWorkspace({
       <div className="mt-6 grid items-start gap-6 xl:grid-cols-[minmax(320px,.8fr)_minmax(0,1.4fr)]">
         <section className="robotics-panel" aria-label="Robotics profile">
           <fieldset disabled={busy || importing} className="min-w-0">
-            <h2 className="text-xl font-medium">Arm profile</h2>
+            <label className="block text-sm">
+              Built-in profile
+              <select
+                aria-label="Built-in robotics profile"
+                className="mt-2 w-full"
+                value={profileKind}
+                onChange={(e) => {
+                  setSavedName("");
+                  if (e.target.value === "ftc") {
+                    applyProfile(validateProfile(FTC_PROFILE));
+                  } else {
+                    applyProfile(validateProfile({
+                      schema_version: 1,
+                      name: "Arm profile",
+                      robotics_profile: "robotics",
+                      robotics_limits: {},
+                      conditions: {},
+                    }));
+                  }
+                }}
+              >
+                <option value="robotics">Arm / manipulator</option>
+                <option value="ftc">FTC / FRC (school robotics)</option>
+              </select>
+            </label>
+            <h2 className="mt-4 text-xl font-medium">{profileKind === "ftc" ? "FTC / FRC profile" : "Arm profile"}</h2>
             <label className="mt-5 block text-sm">
               Profile name
               <input
@@ -511,7 +585,7 @@ export function RoboticsWorkspace({
                 onClick={() => {
                   try {
                     download(
-                      "arm-profile.json",
+                      profileKind === "ftc" ? "ftc-frc-profile.json" : "arm-profile.json",
                       JSON.stringify(currentProfile(), null, 2),
                     );
                   } catch (e) {
@@ -561,6 +635,10 @@ export function RoboticsWorkspace({
                 </button>
               </div>
             )}
+            {profileKind === "ftc" ? (
+              <FtcLimitsEditor limits={ftcLimits} onChange={(next) => { setFtcLimits(next); invalidate(); }} />
+            ) : (
+              <>
             <div className="mt-6 space-y-3">
               {limits.map((limit, index) => (
                 <div
@@ -659,7 +737,9 @@ export function RoboticsWorkspace({
                 </ul>
               </details>
             ) : null}
-            <fieldset className="mt-6 space-y-4">
+              </>
+            )}
+            {profileKind === "robotics" && <fieldset className="mt-6 space-y-4">
               <legend className="mb-4 text-base font-medium">
                 Timing and motion checks
               </legend>
@@ -689,12 +769,20 @@ export function RoboticsWorkspace({
                   />
                 </label>
               ))}
-            </fieldset>
-            <p className="mt-5 text-sm leading-6">
-              Timestamps use seconds. Use consistent units and unwrapped joint
-              positions. URDF supplies declared position, velocity, and effort
-              limits; acceleration limits are entered manually.
-            </p>
+            </fieldset>}
+            {profileKind === "robotics" ? (
+              <p className="mt-5 text-sm leading-6">
+                Timestamps use seconds. Use consistent units and unwrapped joint
+                positions. URDF supplies declared position, velocity, and effort
+                limits; acceleration limits are entered manually.
+              </p>
+            ) : (
+              <p className="mt-5 text-sm leading-6">
+                FTC/FRC checks use motor power, encoder motion, battery voltage,
+                gyro heading, and odometry. Power and voltage limits below are
+                editable before validation.
+              </p>
+            )}
           </fieldset>
         </section>
         <div className="min-w-0 space-y-6">

@@ -13,6 +13,7 @@ import { watch as fsWatch, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, basename, extname } from "node:path";
 import { validateProfile, parseCsvDocument, inspectRows, toCsv, repairPreview, compareReports, githubAnnotations } from "../lib/robotics-workflow.js";
+import { resolveFtcProfile } from "../lib/ftc-frc.js";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout, platform, env } from "node:process";
 import { exec } from "node:child_process";
@@ -126,6 +127,8 @@ function profilePath(name) {
 }
 async function loadProfile(name) {
   if (!name) throw new Error("Provide a profile name or JSON file.");
+  const builtin = resolveFtcProfile(name);
+  if (builtin) return validateProfile(builtin);
   const path = existsSync(name) ? name : profilePath(name);
   return validateProfile(JSON.parse(await readFile(path, "utf8")));
 }
@@ -371,16 +374,17 @@ const commands = {
     const [sub, value] = args._;
     await mkdir(PROFILES_DIR, { recursive: true });
     if (sub === "list") {
-      const names = (await readdir(PROFILES_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5));
-      stdout.write(args.json ? JSON.stringify(names) + "\n" : (names.join("\n") || "No saved profiles.") + "\n"); return;
+      const names = ["ftc", "frc", ...(await readdir(PROFILES_DIR)).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5))];
+      stdout.write(args.json ? JSON.stringify(names) + "\n" : names.map((name) => ["ftc", "frc"].includes(name) ? `${name} (built-in FTC/FRC profile)` : name).join("\n") + "\n"); return;
     }
     if (sub === "show") { stdout.write(JSON.stringify(await loadProfile(value), null, 2) + "\n"); return; }
-    if (sub === "delete") { await unlink(profilePath(value)); ok(`Deleted profile ${value}`); return; }
+    if (sub === "delete") { if (resolveFtcProfile(value)) return fail("Built-in FTC/FRC profiles cannot be deleted."); await unlink(profilePath(value)); ok(`Deleted profile ${value}`); return; }
     if (sub === "import") {
       if (!value) return fail("Usage: simapi profile import <arm.urdf|profile.json> --name <name> [--output <profile.json>]");
       const text = await readFile(value, "utf8");
       const profile = /\.urdf$/i.test(value) ? (await import("../lib/robotics-import.js")).profileFromUrdf(text, args.name) : validateProfile(JSON.parse(text));
       const name = args.name || basename(value, extname(value));
+      if (resolveFtcProfile(name)) return fail("The names ftc and frc are reserved for built-in FTC/FRC profiles.");
       const content = JSON.stringify({ ...profile, name }, null, 2) + "\n";
       // Validate all output paths before writing the named profile.
       const path = profilePath(name);
@@ -485,6 +489,9 @@ async function runValidation(file, key, args) {
   args["fail-on"] ??= projectCfg.fail_on || cfg.fail_on;
   let profileLimits = {};
   let profileConditions = {};
+  let profileFtcLimits = {};
+  let profileUnits = {};
+  let profileKind = "robotics";
   if (args.profile === "") return fail("--profile requires a JSON profile path.");
   if (args.profile) {
     let profile;
@@ -492,6 +499,9 @@ async function runValidation(file, key, args) {
     catch (e) { return fail(e.message); }
     profileLimits = profile.robotics_limits;
     profileConditions = profile.conditions;
+    profileFtcLimits = profile.ftc_limits || {};
+    profileUnits = profile.units || {};
+    profileKind = profile.robotics_profile || "robotics";
     args.profileData = profile;
   }
   let payload;
@@ -514,11 +524,19 @@ async function runValidation(file, key, args) {
           ? { robotics_limits: payload.robotics_limits || projectCfg.robotics_limits }
           : {}),
         data: payload.data || payload.trials || [],
+        ...(payload.robotics_profile ? { robotics_profile: payload.robotics_profile } : {}),
+        ...(payload.ftc_limits ? { ftc_limits: payload.ftc_limits } : {}),
+        ...(payload.units ? { units: payload.units } : {}),
       };
   if (args.profile) {
     if (body.simulation_type !== "robotics") return fail("--profile can only be used with --type robotics.");
     body.robotics_limits = { ...(body.robotics_limits || {}), ...profileLimits };
     body.conditions = { ...body.conditions, ...profileConditions };
+    if (Object.keys(profileUnits).length) body.units = { ...(body.units || {}), ...profileUnits };
+    if (profileKind === "ftc") {
+      body.robotics_profile = "ftc";
+      body.ftc_limits = { ...(body.ftc_limits || {}), ...profileFtcLimits };
+    }
   }
   if (args.report === "") return fail("--report requires an output path.");
   body.run_ai = !args["no-ai"];
@@ -538,7 +556,7 @@ async function runValidation(file, key, args) {
     const err = res.json?.error || {};
     return fail(`[${err.code || res.status}] ${err.message || "validation error"}`);
   }
-  const r = { ...res.json, validation_context: { simulation_type: body.simulation_type, robotics_limits: body.robotics_limits || {}, conditions: body.conditions || {} } };
+  const r = { ...res.json, validation_context: { simulation_type: body.simulation_type, robotics_limits: body.robotics_limits || {}, conditions: body.conditions || {}, ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}), ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}), ...(body.units ? { units: body.units } : {}) } };
   if (args.format === "github") for (const line of githubAnnotations(r, file, payload.source_lines)) process.stderr.write(line + "\n");
   await writeJson(LAST_RUN_PATH, { file, t: Date.now(), result: r });
   if (args.report) await writeFile(args.report, JSON.stringify(r, null, 2) + "\n");
@@ -622,10 +640,10 @@ function renderReport(r, file, simType) {
 const HELP = {
   inspect: { usage: "simapi inspect <file>", desc: "Inspect samples, episodes, timing, signal ranges and missing values locally.", opts: [["--json", "machine-readable inspection"], ["--topic <name>", "choose a recording topic"]] },
   import: { usage: "simapi import <file> --output <run.json>", desc: "Extract JointState samples from ROS 1 bags, ROS 1/2 MCAP, CSV, or JSON. Select --topic when several channels exist.", opts: [["--topic <topic>", "select a JointState channel"], ["--list-topics", "inspect recording channels"], ["--profile <name|file>", "load joint metadata, including prismatic effort units"], ["--episode <id>", "assign an episode identifier"]] },
-  profile: { usage: "simapi profile <import|list|show|delete>", desc: "Import URDF joint limits or JSON profiles, then reuse them by name.", ex: ["simapi profile import arm.urdf --name arm --output arm-profile.json", "simapi profile list", "simapi profile show arm"] },
+  profile: { usage: "simapi profile <import|list|show|delete>", desc: "Import URDF limits or JSON profiles, or use the built-in ftc/frc school robotics profile.", ex: ["simapi profile import arm.urdf --name arm --output arm-profile.json", "simapi profile list", "simapi profile show arm", "simapi validate drive-log.csv --profile ftc"] },
   compare: { usage: "simapi compare baseline.json current.json", desc: "Compare checks, episode findings, exclusions, and configuration.", opts: [["--json", "JSON comparison"], ["--fail-on regression", "fail CI on new or worsened findings"]] },
   init: { usage: "simapi init", desc: "Create a simapi.json config in the current project." },
-  validate: { usage: "simapi validate <file>", desc: "Validate a .json, .csv, or .txt simulation file and print the report. Plain-text/log files are converted to JSON with AI.", opts: [["--summary", "compact report (automatic in CI)"], ["--format github", "emit GitHub Actions annotations"], ["--topic <name>", "select a recording channel"], ["--type <domain>", "simulation domain (defaults to robotics)"], ["--profile <file>", "robotics limits and trajectory check options"], ["--report <file>", "save the full JSON report"], ["--json", "raw JSON output"], ["--no-ai", "skip the AI second pass"], ["--fail-on <level>", "exit non-zero on warning|failed"]], ex: ["simapi validate episode.csv --profile arm-profile.json --fail-on warning", "simapi validate simulation.json", "simapi validate simulations.txt --type aerodynamics"] },
+  validate: { usage: "simapi validate <file>", desc: "Validate a .json, .csv, or .txt simulation file and print the report. Plain-text/log files are converted to JSON with AI.", opts: [["--summary", "compact report (automatic in CI)"], ["--format github", "emit GitHub Actions annotations"], ["--topic <name>", "select a recording channel"], ["--type <domain>", "simulation domain (defaults to robotics)"], ["--profile <file>", "robotics limits and trajectory check options"], ["--report <file>", "save the full JSON report"], ["--json", "raw JSON output"], ["--no-ai", "skip the AI second pass"], ["--fail-on <level>", "exit non-zero on warning|failed"]], ex: ["simapi validate episode.csv --profile arm-profile.json --fail-on warning", "simapi validate drive-log.csv --profile ftc", "simapi validate simulation.json", "simapi validate simulations.txt --type aerodynamics"] },
   domains: { usage: "simapi domains", desc: "List the supported simulation types." },
   doctor: { usage: "simapi doctor [--fix]", desc: "Diagnose config, connectivity, and project setup." },
   explain: { usage: "simapi explain", desc: "Explain the issues from the most recent validation run in detail." },
@@ -647,7 +665,7 @@ function printHelp() {
     ["init", "Create a robotics simapi.json config"],
     ["inspect <file>", "Inspect episode timing, ranges and missing signals"],
     ["import <recording> --output <file>", "Extract JointState data from ROS bags or MCAP"],
-    ["profile <import|list|show|delete>", "Reusable JSON and URDF profiles"],
+    ["profile <import|list|show|delete>", "Reusable JSON, URDF, and built-in ftc/frc profiles"],
     ["compare <baseline> <current>", "Compare checks and episode findings"],
     ["validate <file>", "Validate JSON or CSV simulation data"],
     ["watch <file>", "Re-validate on file change"],
