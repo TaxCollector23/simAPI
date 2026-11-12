@@ -73,6 +73,8 @@ def test_engine_can_run_replacement_suite_list_without_trajectory_suite():
         "time_column": None,
         "episode_column": None,
         "assumptions": [],
+        "limits_source": "defaults",
+        "limit_fallback_signals": [],
     }
     assert report["evidence"] == {"entries": [], "total": 0, "truncated": False}
 
@@ -193,3 +195,42 @@ def test_external_validation_adapter_keeps_other_warnings_out_of_episode_readine
     assert any(check["status"] == "warning" for check in report["checks"])
     assert not any(check["name"] == "robotics_unprofiled_signal" for check in report["checks"])
     assert report["episodes"][0]["training_ready"] is True
+
+
+def test_engine_reports_default_joint_limits_and_fallback_warning():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25}])
+    )
+
+    assert report["summary"]["limits_source"] == "defaults"
+    assert report["summary"]["limit_fallback_signals"] == ["joint_1_position"]
+    assert report["screening_warnings"] == [
+        "screening defaults used for joint_1_position — supply a profile (or import a URDF) for real limits"
+    ]
+
+
+def test_engine_reports_mixed_profile_and_default_joint_limits():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25, "joint_2_velocity": 0.5}]),
+        configured_limits={"joint_1_position": (-1.0, 1.0)},
+    )
+
+    assert report["summary"]["limits_source"] == "mixed"
+    assert report["summary"]["limit_fallback_signals"] == ["joint_2_velocity"]
+    assert report["screening_warnings"] == [
+        "screening defaults used for joint_2_velocity — supply a profile (or import a URDF) for real limits"
+    ]
+
+
+def test_engine_reports_profile_when_all_joint_limits_are_configured():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25, "joint_2_velocity": 0.5}]),
+        configured_limits={
+            "joint_1_position": (-1.0, 1.0),
+            "joint_2_velocity": (-2.0, 2.0),
+        },
+    )
+
+    assert report["summary"]["limits_source"] == "profile"
+    assert report["summary"]["limit_fallback_signals"] == []
+    assert report["screening_warnings"] == []
