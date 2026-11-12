@@ -112,6 +112,35 @@ export interface ValidationResult {
   ai_exclusions?: number[];
 }
 
+export interface SimRealComparisonRequest {
+  sim_data: Record<string, unknown>[];
+  real_data: Record<string, unknown>[];
+  robotics_limits?: Record<string, [number, number]>;
+  conditions?: Record<string, number>;
+  sim_units?: Record<string, string>;
+  real_units?: Record<string, string>;
+  robotics_limit_units?: Record<string, string>;
+}
+
+export interface SimRealComparison {
+  verdict: "aligned" | "drift_detected" | "insufficient_data" | string;
+  comparison_note?: string | null;
+  sim: { status: string; training_ready: boolean; rows: number; excluded_count: number; exclusion_rate: number; checks_passed: number; checks_total: number };
+  real: { status: string; training_ready: boolean; rows: number; excluded_count: number; exclusion_rate: number; checks_passed: number; checks_total: number };
+  signals: Record<string, {
+    sim: Record<string, number>;
+    real: Record<string, number>;
+    overlap: number;
+    drift: boolean;
+  }>;
+  signals_only_in_sim: string[];
+  signals_only_in_real: string[];
+  check_statuses: Record<string, { sim: string; real: string }>;
+  check_pass_rates: Record<string, { sim: boolean; real: boolean }>;
+  unit_conversions?: { sim: Record<string, string>; real: Record<string, string> };
+  request_id?: string;
+}
+
 export interface GeneratedKey {
   api_key: string; label: string; tier: string;
   created_at: number; message: string;
@@ -128,6 +157,22 @@ export async function generateKey(label: string): Promise<GeneratedKey> {
 
 export async function validate(req: ValidationRequest, apiKey: string): Promise<ValidationResult> {
   const r = await fetch(`${API_BASE}/v1/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ error: r.statusText }));
+    throw new Error(err?.error?.message ?? err?.detail?.error ?? err?.error ?? r.statusText);
+  }
+  return r.json();
+}
+
+export async function compareSimReal(
+  req: SimRealComparisonRequest,
+  apiKey: string,
+): Promise<SimRealComparison> {
+  const r = await fetch(`${API_BASE}/v1/compare/sim-real`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
     body: JSON.stringify(req),

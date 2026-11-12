@@ -19,6 +19,7 @@ import {
 import type { Recording } from "@/lib/robotics-import.js";
 import { FTC_DEFAULT_LIMITS, FTC_PROFILE } from "@/lib/ftc-frc.js";
 import { RoboticsRunReport } from "./robotics-run-report";
+import { SimRealComparisonPanel } from "./sim-real-comparison-panel";
 import { TrajectoryExplorer } from "./trajectory-explorer";
 
 type Limit = { signal: string; min: string; max: string };
@@ -839,6 +840,11 @@ export function RoboticsWorkspace({
           </div>
         </div>
       </div>
+      <SimRealComparisonPanel
+        roboticsLimits={profileKind === "robotics" ? chartLimits : {}}
+        conditions={conditions}
+        enabled={profileKind === "robotics"}
+      />
       <div className="mt-6 flex flex-wrap items-center gap-5">
         <button
           onClick={runChecks}
