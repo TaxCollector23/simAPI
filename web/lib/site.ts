@@ -10,22 +10,10 @@ export const site = {
     { label: "How it works", href: "/platform" },
     { label: "Docs", href: "/docs" },
   ],
-  footerGroups: [
-    { title: "Product", links: [
-      { label: "How it works", href: "/platform" },
-      { label: "Benchmarks", href: "/benchmark" },
-      { label: "Use cases", href: "/use-cases" },
-      { label: "Pricing", href: "/pricing" },
-    ] },
-    { title: "Developers", links: [
-      { label: "Documentation", href: "/docs" },
-      { label: "API reference", href: "/docs#api" },
-      { label: "CLI guide", href: "https://github.com/TaxCollector23/simAPI/tree/main/sdk-node#cli" },
-      { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
-    ] },
-    { title: "Legal", links: [
-      { label: "Privacy", href: "/privacy" },
-      { label: "Terms", href: "/terms" },
-    ] },
+  footerLinks: [
+    { label: "Try it out", href: "/play" },
+    { label: "Use in Claude/ChatGPT", href: "/connect" },
+    { label: "Docs", href: "/docs" },
+    { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
   ],
 } as const;
