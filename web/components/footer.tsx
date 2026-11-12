@@ -9,7 +9,7 @@ export function Footer() {
           <div className="max-w-sm">
             <Link href="/" className="landing-footer-brand text-xl font-semibold">SimAPI</Link>
             <p className="mt-4 text-sm leading-6 text-white/60">
-              Upload a robot recording, set robot-specific limits, and review the samples behind each finding before training or CI.
+              Check robot recordings against limits you choose. See what needs a closer look.
             </p>
           </div>
           {site.footerGroups.map((group) => (

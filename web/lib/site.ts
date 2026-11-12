@@ -2,14 +2,12 @@ export const site = {
   name: "SimAPI",
   domain: "simapilander.vercel.app",
   url: "https://simapilander.vercel.app",
-  tagline: "Simulations you can trust",
+  tagline: "Clear checks for robot recordings",
   description:
-    "Robotics validation for trajectories, joint limits, tool data, and Physical AI workflows.",
+    "Check robot recordings against limits you choose and see what needs a closer look.",
   github: "https://github.com/TaxCollector23/simAPI",
   nav: [
-    { label: "Use cases", href: "/use-cases" },
     { label: "How it works", href: "/platform" },
-    { label: "Test results", href: "/benchmark" },
     { label: "Docs", href: "/docs" },
   ],
   footerGroups: [
