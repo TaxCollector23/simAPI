@@ -73,5 +73,164 @@ def test_engine_can_run_replacement_suite_list_without_trajectory_suite():
         "time_column": None,
         "episode_column": None,
         "assumptions": [],
+        "limits_source": "defaults",
+        "limit_fallback_signals": [],
     }
     assert report["evidence"] == {"entries": [], "total": 0, "truncated": False}
+
+
+def test_unprofiled_torque_500_is_not_a_clean_pass():
+    report = RoboticsValidationEngine().validate(pd.DataFrame([{"joint_1_torque": 500.0}]))
+
+    torque = next(check for check in report["checks"] if check["name"] == "robotics_limit:joint_1_torque")
+    assert torque["status"] == "failed"
+    assert torque["low"] == -200.0
+    assert torque["high"] == 200.0
+
+
+def test_unprofiled_torque_50000_fails_with_limit_check():
+    report = RoboticsValidationEngine().validate(pd.DataFrame([{"joint_1_torque": 50_000.0}]))
+
+    torque = next(check for check in report["checks"] if check["name"] == "robotics_limit:joint_1_torque")
+    assert torque["status"] == "failed"
+    assert torque["violations"] == 1
+    assert report["excluded"] == {0: ["joint_1_torque=50000 outside [-200, 200]"]}
+
+
+def test_in_range_default_joint_signal_warns_and_is_named_in_summary():
+    report = RoboticsValidationEngine().validate(pd.DataFrame([{"joint_1_torque": 25.0}]))
+
+    warning = next(check for check in report["checks"] if check["name"] == "robotics_unprofiled_signal")
+    assert warning == {
+        "name": "robotics_unprofiled_signal",
+        "status": "warning",
+        "column": None,
+        "violations": 0,
+        "detail": (
+            "Signals validated with screening defaults only — supply a profile "
+            "(or import a URDF) for real limits: joint_1_torque"
+        ),
+    }
+    assert report["summary"]["unprofiled_signals"] == ["joint_1_torque"]
+
+
+def test_explicit_torque_limit_preserves_check_and_exclusion():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_torque": 95.0}]),
+        configured_limits={"joint_1_torque": (-70.0, 70.0)},
+    )
+
+    torque = next(check for check in report["checks"] if check["name"] == "robotics_limit:joint_1_torque")
+    assert torque["status"] == "failed"
+    assert torque["low"] == -70.0
+    assert torque["high"] == 70.0
+    assert report["excluded"] == {0: ["joint_1_torque=95 outside [-70, 70]"]}
+    assert not any(check["name"] == "robotics_unprofiled_signal" for check in report["checks"])
+
+
+def test_explicit_limits_covering_all_joint_signals_do_not_warn():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{
+            "joint_1_position": 0.25,
+            "joint_1_velocity": 0.5,
+            "joint_1_torque": 25.0,
+        }]),
+        configured_limits={
+            "joint_1_position": (-1.0, 1.0),
+            "joint_1_velocity": (-2.0, 2.0),
+            "joint_1_torque": (-70.0, 70.0),
+        },
+    )
+
+    assert not any(check["name"] == "robotics_unprofiled_signal" for check in report["checks"])
+    assert "unprofiled_signals" not in report["summary"]
+
+
+def test_api_caps_default_only_robotics_verdict_and_training_readiness(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"joint_1_torque": 25.0}],
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    warning = next(check for check in body["robotics_checks"] if check["name"] == "robotics_unprofiled_signal")
+    assert warning["status"] == "warning"
+    assert body["status"] == "warning"
+    assert body["training_ready"] is False
+
+
+def test_physics_validator_torque_screening_bound_is_tightened():
+    from core.physics_validator import BOUNDS, PhysicsValidator, SimulationType
+
+    assert BOUNDS[SimulationType.ROBOTICS]["joint_torque"] == (-200.0, 200.0)
+    report = PhysicsValidator().validate(
+        pd.DataFrame([{"joint_torque": 500.0}]), SimulationType.ROBOTICS, {}, auto_profile=False
+    )
+    check = next(check for check in report.issues if check.name == "bounds_joint_torque")
+    assert check.status.value == "failed"
+
+
+def test_external_validation_adapter_marks_episodes_not_ready_for_unprofiled_warning():
+    from integrations.robotics_validation import validate_robotics_frame
+
+    report = validate_robotics_frame(pd.DataFrame([
+        {"episode_id": "pick", "time": 0.0, "joint_1_torque": 10.0},
+        {"episode_id": "place", "time": 0.0, "joint_1_torque": 12.0},
+    ]))
+
+    assert report["status"] == "warning"
+    assert report["training_ready"] is False
+    assert all(episode["excluded"] == 0 for episode in report["episodes"])
+    assert all(episode["training_ready"] is False for episode in report["episodes"])
+
+
+def test_external_validation_adapter_keeps_other_warnings_out_of_episode_readiness():
+    from integrations.robotics_validation import validate_robotics_frame
+
+    report = validate_robotics_frame(pd.DataFrame([
+        {"episode_id": "state_only", "temperature": 25.0},
+    ]))
+
+    assert any(check["status"] == "warning" for check in report["checks"])
+    assert not any(check["name"] == "robotics_unprofiled_signal" for check in report["checks"])
+    assert report["episodes"][0]["training_ready"] is True
+
+
+def test_engine_reports_default_joint_limits_and_fallback_warning():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25}])
+    )
+
+    assert report["summary"]["limits_source"] == "defaults"
+    assert report["summary"]["limit_fallback_signals"] == ["joint_1_position"]
+    assert report["screening_warnings"] == [
+        "screening defaults used for joint_1_position — supply a profile (or import a URDF) for real limits"
+    ]
+
+
+def test_engine_reports_mixed_profile_and_default_joint_limits():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25, "joint_2_velocity": 0.5}]),
+        configured_limits={"joint_1_position": (-1.0, 1.0)},
+    )
+
+    assert report["summary"]["limits_source"] == "mixed"
+    assert report["summary"]["limit_fallback_signals"] == ["joint_2_velocity"]
+    assert report["screening_warnings"] == [
+        "screening defaults used for joint_2_velocity — supply a profile (or import a URDF) for real limits"
+    ]
+
+
+def test_engine_reports_profile_when_all_joint_limits_are_configured():
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame([{"joint_1_position": 0.25, "joint_2_velocity": 0.5}]),
+        configured_limits={
+            "joint_1_position": (-1.0, 1.0),
+            "joint_2_velocity": (-2.0, 2.0),
+        },
+    )
+
+    assert report["summary"]["limits_source"] == "profile"
+    assert report["summary"]["limit_fallback_signals"] == []
+    assert report["screening_warnings"] == []

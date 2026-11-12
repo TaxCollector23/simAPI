@@ -1,3 +1,4 @@
+import { FTC_DEFAULT_LIMITS } from "./ftc-frc.js";
 /** Shared robotics workflow helpers. Run scripts/sync-robotics.mjs after edits. */
 export const normalize = (v) =>
   String(v)
@@ -38,7 +39,10 @@ export function validateProfile(value) {
   const structured =
     "robotics_limits" in value ||
     "conditions" in value ||
-    "schema_version" in value;
+    "schema_version" in value ||
+    "robotics_profile" in value ||
+    "ftc_limits" in value ||
+    "units" in value;
   const limits = structured ? (value.robotics_limits ?? {}) : value,
     keys = new Set();
   if (!limits || typeof limits !== "object" || Array.isArray(limits))
@@ -56,6 +60,34 @@ export function validateProfile(value) {
       throw new Error(`Invalid range for ${key}. Use [minimum, maximum].`);
   }
   const conditions = structured ? (value.conditions ?? {}) : {};
+  const units = structured ? (value.units ?? {}) : {};
+  if (!units || typeof units !== "object" || Array.isArray(units) || Object.values(units).some((unit) => typeof unit !== "string"))
+    throw new Error("Profile units must map signal names to unit strings.");
+  let roboticsProfile = String(value.robotics_profile ?? "robotics").toLowerCase();
+  if (roboticsProfile === "frc") roboticsProfile = "ftc";
+  if (!["robotics", "ftc"].includes(roboticsProfile))
+    throw new Error("robotics_profile must be 'robotics' or 'ftc'.");
+  const ftcLimits = roboticsProfile === "ftc" ? { ...structuredClone(FTC_DEFAULT_LIMITS), ...(value.ftc_limits ?? {}) } : (value.ftc_limits ?? {});
+  if (!ftcLimits || typeof ftcLimits !== "object" || Array.isArray(ftcLimits))
+    throw new Error("ftc_limits must be an FTC/FRC limit map.");
+  if (roboticsProfile === "ftc") {
+    const rangeKeys = new Set(["motor_power", "battery_voltage"]);
+    const allowedKeys = new Set([
+      "motor_power", "battery_voltage", "battery_sag_voltage",
+      "sag_min_total_power", "velocity_tolerance", "min_moving_speed",
+      "max_speed", "heading_jump_deg",
+    ]);
+    for (const [key, setting] of Object.entries(ftcLimits)) {
+      if (!allowedKeys.has(key)) throw new Error(`Unknown FTC/FRC limit: ${key}`);
+      if (rangeKeys.has(key)) {
+        if (!Array.isArray(setting) || setting.length !== 2 ||
+            !setting.every((n) => typeof n === "number" && Number.isFinite(n)) || setting[0] >= setting[1])
+          throw new Error(`Invalid FTC/FRC range for ${key}.`);
+      } else if (typeof setting !== "number" || !Number.isFinite(setting) || setting < 0) {
+        throw new Error(`Invalid FTC/FRC limit for ${key}.`);
+      }
+    }
+  }
   if (
     !conditions ||
     typeof conditions !== "object" ||
@@ -75,8 +107,11 @@ export function validateProfile(value) {
   return {
     ...(structured ? value : {}),
     schema_version: 1,
-    name: typeof value.name === "string" ? value.name : "Arm profile",
+    name: typeof value.name === "string" ? value.name : roboticsProfile === "ftc" ? "FTC / FRC (school robotics)" : "Arm profile",
+    ...(value.robotics_profile !== undefined ? { robotics_profile: roboticsProfile } : {}),
     robotics_limits: limits,
+    ...(roboticsProfile === "ftc" ? { ftc_limits: ftcLimits } : {}),
+    ...(Object.keys(units).length ? { units } : {}),
     conditions,
   };
 }

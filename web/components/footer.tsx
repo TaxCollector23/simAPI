@@ -9,7 +9,7 @@ export function Footer() {
           <div className="max-w-sm">
             <Link href="/" className="landing-footer-brand text-xl font-semibold">SimAPI</Link>
             <p className="mt-4 text-sm leading-6 text-white/60">
-              Validate robotics data before training or hardware.
+              Upload a robot recording, set robot-specific limits, and review the samples behind each finding before training or CI.
             </p>
           </div>
           {site.footerGroups.map((group) => (
@@ -25,7 +25,6 @@ export function Footer() {
         </div>
         <div className="landing-footer-bottom mt-12 flex flex-col gap-2 border-t border-white/10 pt-6 text-sm sm:flex-row sm:justify-between">
           <p>© {new Date().getFullYear()} SimAPI</p>
-          <p>{site.domain}</p>
         </div>
       </div>
     </footer>

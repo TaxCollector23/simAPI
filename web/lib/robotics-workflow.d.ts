@@ -2,6 +2,9 @@ export type Row = Record<string, unknown>;
 export interface Profile {
   schema_version: number;
   name: string;
+  robotics_profile?: "robotics" | "ftc";
+  ftc_limits?: Record<string, number | [number, number]>;
+  units?: Record<string, string>;
   robotics_limits: Record<string, [number, number]>;
   conditions: Record<string, number>;
   joints?: Record<string, { stem: string; type: string }>;

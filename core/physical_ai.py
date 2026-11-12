@@ -282,6 +282,10 @@ def episode_quality(rows: list[dict[str, Any]],
             conditions=checked_conditions,
         )
         failed = [c for c in report.get("checks", []) if c.get("status") == "failed"]
+        unprofiled_warning = any(
+            c.get("name") == "robotics_unprofiled_signal" and c.get("status") == "warning"
+            for c in report.get("checks", [])
+        )
         labels = _labels_from_checks(report.get("checks", []))
         for extra in (_torque_saturation_labels(ep_rows, limits)
                       + _frozen_sensor_labels(ep_rows)):
@@ -291,21 +295,24 @@ def episode_quality(rows: list[dict[str, Any]],
         flagged_rows = [global_idx[i] for i in local_excluded if i < len(global_idx)]
         total_flagged += len(flagged_rows)
         bad = bool(failed) or bool(labels)
+        warning_only = not bad and unprofiled_warning
         episodes_out.append({
             "episode_id": name,
             "samples": len(ep_rows),
-            "verdict": "failed" if bad else "passed",
+            "verdict": "failed" if bad else "warning" if warning_only else "passed",
             "failure_labels": labels,
             "flagged_rows": flagged_rows,
             "failed_checks": [
                 {"name": c["name"], "detail": c.get("detail", "")} for c in failed
             ],
-            "training_ready": not bad,
+            "training_ready": not bad and not unprofiled_warning,
         })
     bad_eps = [e for e in episodes_out if not e["training_ready"]]
+    failed_eps = [e for e in episodes_out if e["verdict"] == "failed"]
+    warning_eps = [e for e in episodes_out if e["verdict"] == "warning"]
     return {
         "episodes": episodes_out,
-        "verdict": "failed" if bad_eps else "passed",
+        "verdict": "failed" if failed_eps else "warning" if warning_eps else "passed",
         "summary": {
             "episodes": len(episodes_out),
             "training_ready_episodes": len(episodes_out) - len(bad_eps),

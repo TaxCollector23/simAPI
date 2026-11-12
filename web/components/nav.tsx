@@ -23,7 +23,7 @@ export function Nav() {
           ))}
         </div>
 
-        <Link href="/play" className="landing-nav-cta hidden min-h-10 items-center px-4 text-sm font-medium lg:inline-flex">Try SimAPI</Link>
+        <Link href="/play" className="landing-nav-cta hidden min-h-10 items-center px-4 text-sm font-medium lg:inline-flex">Validate a run</Link>
         <button
           type="button"
           className="landing-mobile-toggle inline-flex h-11 w-11 items-center justify-center rounded-lg border lg:hidden"
@@ -43,7 +43,7 @@ export function Nav() {
                 {item.label}
               </Link>
             ))}
-            <Link href="/play" onClick={() => setOpen(false)} className="landing-nav-cta mt-4 inline-flex min-h-11 items-center justify-center px-4 text-sm font-medium">Try SimAPI</Link>
+            <Link href="/play" onClick={() => setOpen(false)} className="landing-nav-cta mt-4 inline-flex min-h-11 items-center justify-center px-4 text-sm font-medium">Validate a run</Link>
           </div>
         </div>
       )}

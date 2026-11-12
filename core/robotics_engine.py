@@ -15,14 +15,14 @@ import pandas as pd
 from core.robotics_evidence import build_evidence
 from core.robotics_trajectory import analyze_trajectories, normalize
 
-# Broad screening bounds only. Robot-specific values should come from the
-# model or controller and replace these for the matching signal.
+# Tight screening bounds only; these are still not robot limits. Robot-specific
+# values should come from the model or controller and replace these per signal.
 DEFAULT_ROBOTICS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_torque": (-100_000.0, 100_000.0),
-    "joint_velocity": (-500.0, 500.0),
-    "joint_acceleration": (-5_000.0, 5_000.0),
+    "joint_torque": (-200.0, 200.0),
+    "joint_velocity": (-10.0, 10.0),
+    "joint_acceleration": (-50.0, 50.0),
     "joint_position": (-4 * 3.141592653589793, 4 * 3.141592653589793),
-    "end_effector_force": (-50_000.0, 50_000.0),
+    "end_effector_force": (-1_000.0, 1_000.0),
     "end_effector_torque": (-10_000.0, 10_000.0),
     "end_effector_velocity": (0.0, 200.0),
     "position_error": (0.0, 500.0),
@@ -35,6 +35,8 @@ DEFAULT_ROBOTICS_LIMITS: dict[str, tuple[float, float]] = {
     "rise_time": (0.0, 1_000.0),
     "workspace_volume": (0.0, 1e6),
 }
+
+_JOINT_SIGNAL_SUFFIXES = ("_position", "_velocity", "_acceleration", "_torque")
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,45 @@ class RoboticsValidationEngine:
                         limits[canonical] = DEFAULT_ROBOTICS_LIMITS["joint_" + quantity]
         limits.update(configured)
 
+        # These defaults screen for implausible values but cannot represent a
+        # particular robot. Track only present joint signals for which the
+        # resolved bound came from the screening defaults, without changing
+        # the existing effort/torque naming behavior.
+        unprofiled_signals = sorted(
+            {
+                normalize(str(column))
+                for column in data.columns
+                if normalize(str(column)).startswith("joint_")
+                and normalize(str(column)) in limits
+                and normalize(str(column)) not in configured
+            }
+        )
+        joint_signals = sorted(
+            {
+                normalize(str(column))
+                for column in data.columns
+                if normalize(str(column)).startswith("joint")
+                and normalize(str(column)).endswith(_JOINT_SIGNAL_SUFFIXES)
+            }
+        )
+        configured_joint_signals = set(joint_signals).intersection(configured)
+        fallback_signals = sorted(set(joint_signals).difference(configured_joint_signals))
+        if joint_signals and len(configured_joint_signals) == len(joint_signals):
+            limits_source = "profile"
+        elif configured_joint_signals:
+            limits_source = "mixed"
+        else:
+            limits_source = "defaults"
+        screening_warnings = (
+            [
+                "screening defaults used for "
+                + ", ".join(fallback_signals)
+                + " — supply a profile (or import a URDF) for real limits"
+            ]
+            if fallback_signals
+            else []
+        )
+
         rows = source_rows if source_rows is not None else data.to_dict("records")
         options = dict(conditions or {})
         context = RoboticsValidationContext(
@@ -190,6 +231,8 @@ class RoboticsValidationEngine:
             "time_column": None,
             "episode_column": None,
             "assumptions": [],
+            "limits_source": limits_source,
+            "limit_fallback_signals": fallback_signals,
         }
         for suite in self.suites:
             result = suite.run(context)
@@ -197,6 +240,22 @@ class RoboticsValidationEngine:
             for row, reasons in result.excluded.items():
                 excluded.setdefault(row, []).extend(reasons)
             summary.update(result.summary)
+
+        if unprofiled_signals:
+            checks.append(
+                {
+                    "name": "robotics_unprofiled_signal",
+                    "status": "warning",
+                    "column": None,
+                    "violations": 0,
+                    "detail": (
+                        "Signals validated with screening defaults only — supply a profile "
+                        "(or import a URDF) for real limits: "
+                        + ", ".join(unprofiled_signals)
+                    ),
+                }
+            )
+            summary["unprofiled_signals"] = unprofiled_signals
 
         episode_key = summary.get("episode_column")
         episode_counts: dict[str, int] = {}
@@ -208,4 +267,10 @@ class RoboticsValidationEngine:
             episode["flagged_samples"] = episode_counts.get(episode["episode_id"], 0)
 
         evidence = build_evidence(rows, checks, limits, options, summary)
-        return {"checks": checks, "excluded": excluded, "summary": summary, "evidence": evidence}
+        return {
+            "checks": checks,
+            "excluded": excluded,
+            "summary": summary,
+            "evidence": evidence,
+            "screening_warnings": screening_warnings,
+        }
