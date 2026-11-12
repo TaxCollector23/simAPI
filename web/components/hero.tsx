@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { ClaudeSpark } from "./claude-spark";
+import { ChatGPTMark } from "./chatgpt-mark";
 
 export function Hero() {
   return (
@@ -16,8 +17,15 @@ export function Hero() {
             <Link href="/play" className="landing-button landing-button-primary">
               Try it out <ArrowUpRight size={17} strokeWidth={1.7} />
             </Link>
-            <Link href="/connect/claude" className="landing-button landing-button-secondary">
-              <ClaudeSpark /> Use in Claude <ArrowUpRight size={17} strokeWidth={1.7} />
+            <Link
+              href="/connect"
+              aria-label="Choose Claude or ChatGPT"
+              className="landing-button landing-button-secondary"
+            >
+              <span>Use in</span>
+              <ClaudeSpark />
+              <ChatGPTMark />
+              <ArrowUpRight size={17} strokeWidth={1.7} />
             </Link>
           </div>
         </div>

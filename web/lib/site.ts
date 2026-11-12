@@ -12,7 +12,7 @@ export const site = {
   ],
   footerLinks: [
     { label: "Try it out", href: "/play" },
-    { label: "Use in Claude/ChatGPT", href: "/connect" },
+    { label: "Choose an assistant", href: "/connect" },
     { label: "Docs", href: "/docs" },
     { label: "GitHub", href: "https://github.com/TaxCollector23/simAPI" },
   ],
