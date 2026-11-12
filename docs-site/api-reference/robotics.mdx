@@ -35,7 +35,10 @@ Invalid units, malformed URDF, or a unit declaration for a signal absent from
 the data returns `400`. When URDF kinematics is requested, rows without enough
 joint or end-effector values are reported as a coverage warning and excluded
 from training-ready data. A failed kinematics check also marks the matching
-episode as not training ready.
+episode as not training ready. URDF FK requests are limited to
+`SIMAPI_MAX_KINEMATICS_SAMPLES` samples (default `10,000`); larger requests
+return `413`. The URDF parser accepts at most 10,000 links and 10,000 joints
+separately, and rejects a child link with multiple parents.
 
 ## Manipulation arm example
 
@@ -108,14 +111,18 @@ curl -X POST "$SIMAPI_URL/v1/validate/physics-only" \
 The response has a `ftc_frc_report` with `verdict`, `failed_checks`,
 `warnings`, `excluded_rows`, and episode summaries. Warnings make
 `training_ready` false; a wrap such as `179°` to `-179°` is handled as a small
-heading change.
+heading change. Recognized numeric telemetry fields must contain finite
+numbers when present. Null, non-numeric, or non-finite values create an
+`invalid_numeric_signal` failure and exclude the affected row.
 
 ## Synchronize sensor streams
 
-`POST /v1/streams/sync` compares timestamp arrays by sample index. The first
-stream is the reference. Offsets and their spread must stay within
-`tolerance_seconds`, and stream lengths must match for an in-sync verdict.
-Send at least two named streams to make a comparison.
+`POST /v1/streams/sync` compares timestamp arrays by sample index. Send at
+least two named, non-empty streams. The first stream is the reference. Offsets
+and their spread must stay within `tolerance_seconds`, and stream lengths must
+match for an in-sync verdict. Requests are capped at 32 streams and the API row
+limit (`SIMAPI_MAX_ROWS`, default `1,000,000` timestamp samples summed across
+all streams).
 
 ```bash
 curl -X POST "$SIMAPI_URL/v1/streams/sync" \
