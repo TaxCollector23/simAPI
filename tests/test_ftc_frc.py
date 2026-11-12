@@ -67,3 +67,20 @@ def test_ftc_non_numeric_and_non_finite_recognized_signals_fail_closed():
     assert missing["failed_checks"][0]["name"] == "invalid_numeric_signal"
     assert missing_time["verdict"] == "failed"
     assert missing_time["failed_checks"][0]["name"] == "invalid_numeric_signal"
+
+
+def test_ftc_encoder_ticks_are_checked_against_reported_velocity():
+    consistent = validate_ftc_log([
+        {"time": 0.0, "left_encoder_ticks": 0, "left_encoder_velocity": 0},
+        {"time": 0.1, "left_encoder_ticks": 10, "left_encoder_velocity": 100},
+    ])
+    inconsistent = validate_ftc_log([
+        {"time": 0.0, "left_encoder_ticks": 0, "left_encoder_velocity": 0},
+        {"time": 0.1, "left_encoder_ticks": 0, "left_encoder_velocity": 1000},
+    ])
+
+    assert consistent["verdict"] == "passed"
+    assert "encoder_velocity" not in {check["name"] for check in consistent["failed_checks"]}
+    assert inconsistent["verdict"] == "failed"
+    assert "encoder_velocity" in {check["name"] for check in inconsistent["failed_checks"]}
+    assert inconsistent["excluded_rows"]["1"]
