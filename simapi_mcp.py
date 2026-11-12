@@ -29,6 +29,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 
 # --- find the SimAPI repo so we can import its real engine, not a copy ---
@@ -46,6 +47,7 @@ mcp = FastMCP("simapi")
 
 _HTTP_MODE = os.environ.get("SIMAPI_MCP_TRANSPORT", "stdio").lower() == "streamable-http"
 _DEFAULT_MAX_ROWS = 10_000
+_DEFAULT_MAX_ZIP_ENTRIES = 10_000
 # Keep base64 uploads within the MCP SDK's default 4 MiB HTTP body ceiling.
 _MAX_UPLOAD_BYTES = 3 * 1024 * 1024
 
@@ -69,13 +71,17 @@ def _clean_report(report: dict) -> dict:
     """Turn the engine's report into a small JSON-friendly verdict for an AI to explain."""
     checks = report.get("checks", [])
     failed = [c for c in checks if c.get("status") == "failed"]
+    warnings = [c for c in checks if c.get("status") == "warning"]
     excluded = {
         str(row): reasons for row, reasons in (report.get("excluded") or {}).items()
     }
     return {
-        "verdict": "failed" if failed else "passed",
+        "verdict": "failed" if failed else "warning" if warnings else "passed",
         "failed_checks": [
             {"name": c["name"], "detail": c.get("detail", "")} for c in failed
+        ],
+        "warning_checks": [
+            {"name": c["name"], "detail": c.get("detail", "")} for c in warnings
         ],
         "all_checks": [
             {"name": c["name"], "status": c.get("status"), "detail": c.get("detail", "")}
@@ -87,20 +93,33 @@ def _clean_report(report: dict) -> dict:
 
 
 def _validate_limits(robotics_limits: dict | None) -> dict:
-    """Each limit must be [min, max] with min <= max. Raise a clear error
-    instead of letting a malformed profile produce confusing results."""
+    """Validate finite, non-degenerate bounds before they reach the engine."""
+    if robotics_limits is not None and not isinstance(robotics_limits, Mapping):
+        raise ValueError("robotics_limits must map signal names to [min, max] pairs")
     limits: dict = {}
     for name, rng in (robotics_limits or {}).items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("robotics_limits signal names must be non-empty strings")
+        if isinstance(rng, (str, bytes)):
+            raise ValueError(
+                f"robotics_limits[{name!r}] must be a [min, max] pair of finite numbers"
+            )
         try:
             lo, hi = rng
+            if isinstance(lo, bool) or isinstance(hi, bool):
+                raise ValueError
             pair = (float(lo), float(hi))
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError(
                 f"robotics_limits[{name!r}] must be a [min, max] pair of "
-                f"numbers, got {rng!r}"
+                f"finite numbers, got {rng!r}"
             ) from exc
-        if pair[0] > pair[1]:
-            raise ValueError(f"robotics_limits[{name!r}] has min > max: {rng!r}")
+        if not all(math.isfinite(value) for value in pair):
+            raise ValueError(f"robotics_limits[{name!r}] bounds must be finite, got {rng!r}")
+        if pair[0] >= pair[1]:
+            raise ValueError(
+                f"robotics_limits[{name!r}] minimum must be less than maximum: {rng!r}"
+            )
         limits[name] = pair
     return limits
 
@@ -147,6 +166,10 @@ def _max_rows() -> int:
     return _positive_env_int("SIMAPI_MCP_MAX_ROWS", _DEFAULT_MAX_ROWS)
 
 
+def _max_zip_entries() -> int:
+    return _positive_env_int("SIMAPI_MCP_MAX_ZIP_ENTRIES", _DEFAULT_MAX_ZIP_ENTRIES)
+
+
 def _enforce_row_cap(count: int, *, lower_bound: bool = False) -> None:
     cap = _max_rows()
     if count > cap:
@@ -191,8 +214,14 @@ def validate_robotics_csv(
 
     The CSV needs one row per sample and columns like time, episode_id,
     joint_1_position, joint_1_velocity, joint_1_torque.
-    Same limits/conditions as validate_robotics_episode.
+    Same limits/conditions as validate_robotics_episode. Local paths are
+    available in stdio mode only; HTTP clients must send rows or use uploads.
     """
+    if _HTTP_MODE or os.environ.get("SIMAPI_MCP_TRANSPORT", "stdio").lower() == "streamable-http":
+        raise ValueError(
+            "Local CSV paths are disabled in HTTP mode. Send rows to "
+            "validate_robotics_episode or upload a supported recording instead."
+        )
     df = pd.read_csv(csv_path, nrows=_max_rows() + 1)
     rows = df.where(pd.notnull(df), None).to_dict("records")
     _enforce_row_cap(len(rows), lower_bound=True)
@@ -205,13 +234,24 @@ def _clean_loader_report(report: dict) -> dict:
     'exclusions' (int keys) instead of 'verdict'/'excluded'."""
     checks = report.get("checks", [])
     failed = [c for c in checks if c.get("status") == "failed"]
+    warnings = [c for c in checks if c.get("status") == "warning"]
+    status = report.get("status")
+    if status == "failed" or failed:
+        verdict = "failed"
+    elif status == "warning" or warnings:
+        verdict = "warning"
+    else:
+        verdict = status or "passed"
     excluded = {
         str(row): reasons for row, reasons in (report.get("exclusions") or {}).items()
     }
     out = {
-        "verdict": report.get("status", "failed" if failed else "passed"),
+        "verdict": verdict,
         "failed_checks": [
             {"name": c["name"], "detail": c.get("detail", "")} for c in failed
+        ],
+        "warning_checks": [
+            {"name": c["name"], "detail": c.get("detail", "")} for c in warnings
         ],
         "all_checks": [
             {"name": c["name"], "status": c.get("status"), "detail": c.get("detail", "")}
@@ -251,12 +291,13 @@ def _validate_recording_path(
         target.suffix.lower() == ".parquet"
         or (target.is_dir() and any(target.rglob("*.parquet")))
     )
+    max_rows = _max_rows()
     if is_lerobot:
-        frame = load_lerobot(target, max_episodes=max_episodes)
+        frame = load_lerobot(target, max_episodes=max_episodes, max_rows=max_rows)
         recording_format = "lerobot"
         time_unit = str(frame.attrs.get("time_unit", "seconds"))
     else:
-        frame = load_rosbag2(target, topic_hint=topic_hint)
+        frame = load_rosbag2(target, topic_hint=topic_hint, max_rows=max_rows)
         recording_format = "rosbag2"
         time_unit = "seconds"
     _enforce_row_cap(len(frame))
@@ -330,7 +371,14 @@ def _safe_extract_zip(archive_path: Path, destination: Path) -> Path:
     """Extract a bounded recording archive without allowing path traversal."""
     total_size = 0
     with zipfile.ZipFile(archive_path) as archive:
-        for member in archive.infolist():
+        members = archive.infolist()
+        max_entries = _max_zip_entries()
+        if len(members) > max_entries:
+            raise ValueError(
+                f"Recording zip has {len(members)} entries; "
+                f"SIMAPI_MCP_MAX_ZIP_ENTRIES is {max_entries}."
+            )
+        for member in members:
             path = Path(member.filename)
             if path.is_absolute() or ".." in path.parts:
                 raise ValueError("Recording zip contains an unsafe path.")
@@ -495,10 +543,11 @@ def export_clean_episodes(
     """Export ONLY the clean episodes from robot trajectory data.
 
     Each episode (grouped by episode_id) is validated on its own with
-    SimAPI. Episodes with NO failed checks are kept WHOLE — every row,
-    in the original order. Episodes with any failed check are removed
+    SimAPI. Episodes with no failed or warning checks are kept whole — every
+    row in the original order. Episodes with a failed or warning check are removed
     whole (cutting single rows out would leave silent time gaps inside
-    a movement, which is its own kind of bad training data).
+    a movement, which is its own kind of bad training data). Warnings are
+    not training-ready and appear under warning_checks in removed_episodes.
 
     rows / robotics_limits / max_time_step / velocity_tolerance: same as
     validate_robotics_episode.
@@ -506,7 +555,8 @@ def export_clean_episodes(
     Returns:
       clean_rows:       the rows to train on (clean episodes only).
       kept_episodes:    episode ids that passed.
-      removed_episodes: [{episode_id, rows_removed, failed_checks}] —
+      removed_episodes: [{episode_id, rows_removed, failed_checks,
+                          warning_checks}] —
                         what was taken out and WHY, never silently.
       summary:          row/episode counts in and out.
     """
@@ -533,6 +583,7 @@ def export_clean_episodes(
                 "episode_id": name,
                 "rows_removed": len(ep_rows),
                 "failed_checks": result["failed_checks"],
+                "warning_checks": result["warning_checks"],
                 "excluded_rows_within_episode": result["excluded_rows"],
             })
     # Preserve the caller's original row order exactly (episodes are

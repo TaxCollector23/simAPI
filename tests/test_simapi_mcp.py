@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import zipfile
 
 import pandas as pd
 import pytest
@@ -123,7 +124,10 @@ def test_http_authenticated_tools_and_recording_upload():
             "good-token",
             session_id,
             "validate_robotics_episode",
-            {"rows": [{"joint_1_position": 0.1}]},
+            {"rows": [
+                {"time": 0.0, "joint_1_position": 0.1},
+                {"time": 0.1, "joint_1_position": 0.2},
+            ]},
             request_id=3,
         )
         assert report["isError"] is False
@@ -179,6 +183,8 @@ def test_http_rate_limit_returns_429_and_retry_after():
 
 
 def test_row_cap_applies_to_episode_csv_and_export_tools(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "_HTTP_MODE", False)
+    monkeypatch.setenv("SIMAPI_MCP_TRANSPORT", "stdio")
     monkeypatch.setenv("SIMAPI_MCP_MAX_ROWS", "3")
     rows = [{"joint_1_position": float(index)} for index in range(4)]
 
@@ -191,6 +197,115 @@ def test_row_cap_applies_to_episode_csv_and_export_tools(monkeypatch, tmp_path):
     csv_path.write_text("joint_1_position\n0\n1\n2\n3\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"at least 4 rows; SIMAPI_MCP_MAX_ROWS is 3"):
         server.validate_robotics_csv(str(csv_path))
+
+
+def test_http_mode_refuses_local_csv_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "_HTTP_MODE", True)
+    csv_path = tmp_path / "private.csv"
+    csv_path.write_text("joint_1_position\n50000\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Local CSV paths are disabled in HTTP mode"):
+        server.validate_robotics_csv(str(csv_path))
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"joint_1_torque": [True, 1.0]},
+        {"joint_1_torque": [float("nan"), 1.0]},
+        {"joint_1_torque": [0.0, float("inf")]},
+        {"joint_1_torque": [1.0, 1.0]},
+    ],
+)
+def test_explicit_limits_reject_boolean_nonfinite_or_equal_bounds(limits):
+    with pytest.raises(ValueError, match="joint_1_torque"):
+        server._validate_limits(limits)
+
+
+def test_warning_checks_are_not_clean_passes_or_exported(monkeypatch):
+    warning = {
+        "name": "robotics_time_coverage",
+        "status": "warning",
+        "detail": "No usable time column.",
+    }
+
+    def warning_report(*args, **kwargs):
+        return {
+            "checks": [warning],
+            "excluded": {},
+            "summary": {"episodes": []},
+            "evidence": {},
+        }
+
+    monkeypatch.setattr(server, "check_robotics_limits", warning_report)
+    rows = [{"episode_id": "missing-time", "joint_1_position": 0.1}]
+
+    report = server.validate_robotics_episode(rows)
+    exported = server.export_clean_episodes(rows)
+
+    assert report["verdict"] == "warning"
+    assert report["warning_checks"] == [{
+        "name": "robotics_time_coverage", "detail": "No usable time column."
+    }]
+    assert exported["clean_rows"] == []
+    assert exported["kept_episodes"] == []
+    assert exported["removed_episodes"][0]["warning_checks"] == report["warning_checks"]
+
+
+def test_recording_row_cap_is_passed_to_loaders_before_conversion(monkeypatch, tmp_path):
+    from integrations import lerobot_loader, robotics_validation, ros2_loader
+
+    monkeypatch.setenv("SIMAPI_MCP_MAX_ROWS", "7")
+    frame = pd.DataFrame({
+        "episode_id": ["one"],
+        "t": [0.0],
+        "joint_1_position": [0.1],
+    })
+    calls = []
+
+    def load_lerobot(path, *, max_episodes=None, max_rows=None):
+        calls.append(("lerobot", max_rows))
+        return frame
+
+    def load_rosbag2(path, *, topic_hint="joint_states", max_rows=None):
+        calls.append(("rosbag", max_rows))
+        return frame
+
+    def validate_frame(data, *, limits=None, conditions=None, time_unit="seconds"):
+        return {
+            "checks": [{"name": "ok", "status": "passed", "detail": "ok"}],
+            "status": "passed",
+            "exclusions": {},
+            "episodes": [],
+            "rows": len(data),
+        }
+
+    monkeypatch.setattr(lerobot_loader, "load_lerobot", load_lerobot)
+    monkeypatch.setattr(ros2_loader, "load_rosbag2", load_rosbag2)
+    monkeypatch.setattr(robotics_validation, "validate_robotics_frame", validate_frame)
+
+    parquet = tmp_path / "data.parquet"
+    parquet.write_bytes(b"fixture")
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    server._validate_recording_path(parquet, None, None, None, "joint_states", None)
+    server._validate_recording_path(bag, None, None, None, "joint_states", None)
+
+    assert calls == [("lerobot", 7), ("rosbag", 7)]
+
+
+def test_zip_entry_count_is_bounded_before_extraction(monkeypatch, tmp_path):
+    monkeypatch.setenv("SIMAPI_MCP_MAX_ZIP_ENTRIES", "1")
+    archive_path = tmp_path / "many-empty.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("first.txt", b"")
+        archive.writestr("second.txt", b"")
+    destination = tmp_path / "extracted"
+
+    with pytest.raises(ValueError, match="SIMAPI_MCP_MAX_ZIP_ENTRIES is 1"):
+        server._safe_extract_zip(archive_path, destination)
+
+    assert not destination.exists()
 
 
 def test_upload_rejects_invalid_base64_and_unsupported_content():

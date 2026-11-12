@@ -287,15 +287,19 @@ behind a TLS terminating reverse proxy when remote clients need to connect.
 Set `SIMAPI_MCP_ALLOWED_HOSTS` to the public hostnames and ports served by the
 proxy. Browser based MCP clients can also set `SIMAPI_MCP_ALLOWED_ORIGINS`;
 the SDK keeps its local-only defaults when these allowlists are unset.
-The episode, CSV, and clean-episode tools reject more than
-`SIMAPI_MCP_MAX_ROWS` rows (default 10,000) instead of truncating them.
+The episode, CSV, clean-episode, and recording tools reject more than
+`SIMAPI_MCP_MAX_ROWS` rows (default 10,000) instead of truncating them. The
+recording cap is passed into the LeRobot and ROS readers so they can reject
+oversized inputs before retaining a larger converted frame. ZIP uploads also
+reject more than `SIMAPI_MCP_MAX_ZIP_ENTRIES` entries (default 10,000).
 
-Local file paths are disabled for `validate_recording` in HTTP mode. Use
-`validate_recording_upload` with base64 file content and a filename. Accepted
-`.parquet`, `.db3`, `.mcap`, and `.zip` files are written to a private
-temporary directory and removed after validation. The HTTP upload is capped
-at 3 MiB to fit the MCP SDK's default request-body limit. Stdio mode remains
-local and does not require a key.
+All path-based tools, including `validate_robotics_csv` and
+`validate_recording`, are disabled in HTTP mode. Send row data to
+`validate_robotics_episode`, or use `validate_recording_upload` with base64
+file content and a filename. Accepted `.parquet`, `.db3`, `.mcap`, and `.zip`
+files are written to a private temporary directory and removed after
+validation. The HTTP upload is capped at 3 MiB to fit the MCP SDK's default
+request-body limit. Stdio mode remains local and does not require a key.
 
 ## Current scope
 
