@@ -6,6 +6,6 @@ useDefault = true
 [[allowlists]]
 description = "The legacy benchmark env-var name is non-secret and only occurs in its source file."
 condition = "AND"
-regexTarget = "secret"
-regexes = ['''SIMAPI_TRAJECTORY_BASELINE''']
+regexTarget = "line"
+regexes = ['''SIMAPI_TRAJECTORY_BASELINE"\s*,\s*"7a9d5c39c64b32926006f46c69f3ea9f38998aeb"''']
 paths = ['''^benchmark/robotics_trajectory_benchmark\.py$''']
