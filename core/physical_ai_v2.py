@@ -345,36 +345,60 @@ def _profile_limits_for_rows(profile_name: str, rows: list[dict[str, Any]]) -> d
     for a profile: a 1-joint log must not fail for joints 2-6 that it
     simply doesn't record."""
     present = {str(col) for row in rows for col in row}
-    key = str(profile_name).strip().lower()
-    if key not in ARM_PROFILES:
+    profile_key = str(profile_name).strip().lower()
+    if profile_key not in ARM_PROFILES:
         raise ValueError(
             f"Unknown arm profile {profile_name!r}. Known profiles: "
             f"{', '.join(sorted(ARM_PROFILES))}"
         )
-    profile = ARM_PROFILES[key]
+    profile = ARM_PROFILES[profile_key]
     limits: dict[str, tuple[float, float]] = {}
     indices = _joint_indices(rows)
     if indices:
         for i in indices:
-            if i <= 0 or i > int(profile["default_joints"]):
+            if i <= 0 or (
+                profile_key != GENERIC_PROFILE_NAME
+                and i > int(profile["default_joints"])
+            ):
                 continue
             joint_limits = profile.get("joint_limits", {}).get(i, {})
             for quantity, fallback in profile["limits"].items():
                 bounds = joint_limits.get(quantity, fallback)
-                key = f"joint_{i}_{quantity}"
-                if key in present:
-                    limits[key] = (float(bounds[0]), float(bounds[1]))
+                signal_name = f"joint_{i}_{quantity}"
+                if signal_name in present:
+                    limits[signal_name] = (float(bounds[0]), float(bounds[1]))
                 if quantity == "torque":
                     effort_key = f"joint_{i}_effort"
                     if effort_key in present:
                         limits[effort_key] = (float(bounds[0]), float(bounds[1]))
+
+    # The generic profile is a broad screening guard, so its bounds must
+    # cover every joint signal the core recognizes, including named joints
+    # and numbered joints beyond the profile's nominal six-joint example.
+    if profile_key == GENERIC_PROFILE_NAME:
+        for raw_name in present:
+            name = normalize(raw_name)
+            if not name.startswith("joint"):
+                continue
+            quantity = next(
+                (q for q in ("position", "velocity", "acceleration", "torque", "effort")
+                 if name.endswith("_" + q)),
+                None,
+            )
+            if quantity is None:
+                continue
+            profile_quantity = "torque" if quantity == "effort" else quantity
+            bounds = profile["limits"].get(profile_quantity)
+            if bounds is not None:
+                limits[name] = (float(bounds[0]), float(bounds[1]))
+
     for quantity, bounds in profile["limits"].items():
         keys = [f"joint_{quantity}"]
         if quantity == "torque":
             keys.append("joint_effort")
-        for key in keys:
-            if key in present:
-                limits[key] = (float(bounds[0]), float(bounds[1]))
+        for signal_name in keys:
+            if signal_name in present:
+                limits[signal_name] = (float(bounds[0]), float(bounds[1]))
     return limits
 
 
@@ -476,7 +500,18 @@ def validate_guarded(rows: list[dict[str, Any]],
         effective.update(explicit)  # caller's own numbers win
         limits_source = "profile" if not explicit else "profile+explicit"
         profile_used: str | None = profile_name
-        if not profile_limits:
+        if profile_name == GENERIC_PROFILE_NAME:
+            guard_check = {
+                "name": "profile_guard", "column": None, "status": "warning",
+                "violations": 0,
+                "detail": (
+                    "Profile 'generic_lab_arm' supplies screening-only bounds, "
+                    "not limits for a specific robot. Verify the robot's "
+                    "URDF or datasheet and supply robot-specific limits before "
+                    "treating this data as training-ready."
+                ),
+            }
+        elif not profile_limits:
             guard_check = {
                 "name": "profile_guard", "column": None, "status": "warning",
                 "violations": 0,

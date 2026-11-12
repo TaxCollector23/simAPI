@@ -83,6 +83,51 @@ def test_guard_fails_loudly_on_impossible_torque_and_allow_defaults_still_warns(
     assert raw["training_ready"] is False
 
 
+def test_generic_screening_bounds_cover_high_and_named_joint_signals():
+    report = validate_guarded([{
+        "joint_8_torque": 50_000.0,
+        "joint_elbow_torque": 50_000.0,
+    }])
+
+    for signal in ("joint_8_torque", "joint_elbow_torque"):
+        assert report["limits_used"][signal] == (-150.0, 150.0)
+        check = next(
+            c for c in report["checks"]
+            if c["name"] == f"robotics_limit:{signal}"
+        )
+        assert check["status"] == "failed"
+    assert report["verdict"] == "failed"
+    assert report["training_ready"] is False
+
+
+def test_explicit_generic_profile_remains_screening_only():
+    impossible = validate_guarded(
+        [{"joint_8_torque": 50_000.0}], profile=GENERIC_PROFILE_NAME
+    )
+    assert impossible["limits_used"]["joint_8_torque"] == (-150.0, 150.0)
+    assert any(
+        c["name"] == "robotics_limit:joint_8_torque" and c["status"] == "failed"
+        for c in impossible["checks"]
+    )
+    assert any(
+        c["name"] == "profile_guard" and c["status"] == "warning"
+        for c in impossible["checks"]
+    )
+    assert impossible["training_ready"] is False
+
+    report = validate_guarded(
+        [{"joint_elbow_torque": 5.0}], profile=GENERIC_PROFILE_NAME
+    )
+
+    assert report["limits_used"]["joint_elbow_torque"] == (-150.0, 150.0)
+    assert any(
+        c["name"] == "profile_guard" and c["status"] == "warning"
+        for c in report["checks"]
+    )
+    assert report["verdict"] == "warning"
+    assert report["training_ready"] is False
+
+
 def test_guard_respects_explicit_limits_and_named_profiles_without_guard_warning():
     explicit = validate_guarded(
         [{"joint_1_torque": 95.0}],
