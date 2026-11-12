@@ -209,6 +209,12 @@ def validate_ftc_log(rows: list[dict[str, Any]],
     for idx, row in enumerate(rows):
         for col in sorted(numeric_signal_cols):
             if col not in row:
+                fail(
+                    "invalid_numeric_signal",
+                    idx,
+                    f"row {idx}: {col} is missing",
+                    f"{col} is missing or non-finite/non-numeric",
+                )
                 continue
             raw = row[col]
             value = _num(raw)

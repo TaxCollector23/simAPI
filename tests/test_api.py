@@ -385,8 +385,18 @@ def test_ftc_profile_api_dispatch_and_fail_closed_empty_logs(client):
         "simulation_type": "robotics",
         "robotics_profile": "ftc",
     })
+    missing_signal = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"time": 0.0, "left_motor_power": 0.5},
+            {"time": 0.02},
+        ],
+        "simulation_type": "robotics",
+        "robotics_profile": "ftc",
+    })
 
-    assert [r.status_code for r in (passing, failing, empty, unrecognized, malformed)] == [200, 200, 200, 200, 200]
+    assert [r.status_code for r in (passing, failing, empty, unrecognized, malformed, missing_signal)] == [
+        200, 200, 200, 200, 200, 200
+    ]
     assert passing.json()["status"] in {"passed", "warning"}
     assert passing.json()["profile"] == "ftc"
     assert failing.json()["status"] == "failed"
@@ -398,6 +408,8 @@ def test_ftc_profile_api_dispatch_and_fail_closed_empty_logs(client):
     assert malformed.json()["status"] == "failed"
     assert malformed.json()["training_ready"] is False
     assert malformed.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "invalid_numeric_signal"
+    assert missing_signal.json()["status"] == "failed"
+    assert missing_signal.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "invalid_numeric_signal"
 
 
 _SIMPLE_URDF = """<robot name="one_joint">
