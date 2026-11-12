@@ -67,6 +67,7 @@ FAILURE_LABELS = (
 
 EPISODE_KEYS = ("episode_id", "episode", "trajectory_id", "sequence_id")
 TIME_KEYS = ("time", "t", "timestamp", "simulation_time", "sim_time", "elapsed_time")
+MAX_STREAM_SYNC_SAMPLES = 1_000_000
 
 
 # --------------------------------------------------------------------------
@@ -366,8 +367,15 @@ def check_stream_sync(streams: dict[str, list[float]],
 
     names = list(cleaned)
     if len(names) < 2:
-        return {"verdict": "passed", "in_sync": True, "streams": {},
+        return {"verdict": "insufficient_data", "in_sync": False, "streams": {},
                 "detail": "Need at least two streams to compare."}
+    if len(names) > 32:
+        raise ValueError("At most 32 streams can be synchronized in one request")
+    sample_count = sum(len(values) for values in cleaned.values())
+    if sample_count > MAX_STREAM_SYNC_SAMPLES:
+        raise ValueError(
+            f"Stream synchronization is limited to {MAX_STREAM_SYNC_SAMPLES} timestamps per request"
+        )
     reference_name = names[0]
     reference = cleaned[reference_name]
     compared: dict[str, Any] = {}

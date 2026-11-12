@@ -228,8 +228,14 @@ class StreamSyncRequest(BaseModel):
     @field_validator("streams")
     @classmethod
     def validate_stream_times(cls, value):
-        if not value:
-            raise ValueError("At least one timestamp stream is required")
+        if len(value) < 2:
+            raise ValueError("At least two timestamp streams are required")
+        if len(value) > 32:
+            raise ValueError("At most 32 timestamp streams can be synchronized")
+        if any(not name.strip() for name in value):
+            raise ValueError("Timestamp stream names must be non-empty")
+        if any(not timestamps for timestamps in value.values()):
+            raise ValueError("Timestamp streams cannot be empty")
         if any(not math.isfinite(timestamp) for timestamps in value.values() for timestamp in timestamps):
             raise ValueError("Stream timestamps must be finite numbers")
         return value
@@ -1071,9 +1077,16 @@ async def _validate_robotics_core(
     additional_suites = None
     prismatic_signals: set[str] = set()
     if req.urdf_xml is not None:
+        if len(req.data) > settings.max_kinematics_samples:
+            raise PayloadTooLargeError(
+                f"URDF FK validation is limited to {settings.max_kinematics_samples} sample(s).",
+                details={"rows": len(req.data), "limit": settings.max_kinematics_samples},
+            )
         try:
             kinematics_suite = KinematicsSuite(
-                req.urdf_xml, tolerance_m=req.kinematics_tolerance_m
+                req.urdf_xml,
+                tolerance_m=req.kinematics_tolerance_m,
+                max_evaluations=settings.max_kinematics_samples,
             )
             additional_suites = [kinematics_suite]
             for joint in kinematics_suite.urdf_geometry.active_joints:
@@ -1652,7 +1665,15 @@ async def prometheus_metrics() -> str:
 @app.post("/v1/streams/sync", tags=["validation"])
 async def validate_stream_sync(req: StreamSyncRequest, _: str = Depends(caller_identity)):
     """Compare camera/state/action clocks using the fixed Physical-AI sync report."""
-    from core.physical_ai import check_stream_sync
+    from core.physical_ai import MAX_STREAM_SYNC_SAMPLES, check_stream_sync
+
+    total_samples = sum(len(timestamps) for timestamps in req.streams.values())
+    sample_limit = min(settings.max_rows, MAX_STREAM_SYNC_SAMPLES)
+    if total_samples > sample_limit:
+        raise PayloadTooLargeError(
+            f"Stream synchronization is limited to {sample_limit} timestamps per request.",
+            details={"samples": total_samples, "limit": sample_limit},
+        )
 
     return check_stream_sync(req.streams, req.tolerance_seconds)
 

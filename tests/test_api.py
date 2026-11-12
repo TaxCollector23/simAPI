@@ -380,8 +380,13 @@ def test_ftc_profile_api_dispatch_and_fail_closed_empty_logs(client):
         "simulation_type": "robotics",
         "robotics_profile": "frc",
     })
+    malformed = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0.0, "left_motor_power": "not-a-number"}],
+        "simulation_type": "robotics",
+        "robotics_profile": "ftc",
+    })
 
-    assert [r.status_code for r in (passing, failing, empty, unrecognized)] == [200, 200, 200, 200]
+    assert [r.status_code for r in (passing, failing, empty, unrecognized, malformed)] == [200, 200, 200, 200, 200]
     assert passing.json()["status"] in {"passed", "warning"}
     assert passing.json()["profile"] == "ftc"
     assert failing.json()["status"] == "failed"
@@ -390,6 +395,9 @@ def test_ftc_profile_api_dispatch_and_fail_closed_empty_logs(client):
     assert empty.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "no_data"
     assert unrecognized.json()["status"] == "failed"
     assert unrecognized.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "no_robot_signals"
+    assert malformed.json()["status"] == "failed"
+    assert malformed.json()["training_ready"] is False
+    assert malformed.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "invalid_numeric_signal"
 
 
 _SIMPLE_URDF = """<robot name="one_joint">
@@ -498,6 +506,29 @@ def test_prismatic_joint_urdf_allows_meter_units(client):
     assert wrong_unit.status_code == 400
 
 
+def test_urdf_kinematics_respects_configured_sample_cap(client, monkeypatch):
+    from dataclasses import replace
+
+    import api.server as server
+
+    monkeypatch.setattr(
+        server, "settings", replace(server.settings, max_kinematics_samples=1)
+    )
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"joint_1_position": 0.0, "end_effector_x": 1.0,
+             "end_effector_y": 0.0, "end_effector_z": 0.0},
+            {"joint_1_position": 0.1, "end_effector_x": 1.0,
+             "end_effector_y": 0.1, "end_effector_z": 0.0},
+        ],
+        "simulation_type": "robotics",
+        "urdf_xml": _SIMPLE_URDF,
+    })
+
+    assert response.status_code == 413
+    assert response.json()["error"]["details"]["limit"] == 1
+
+
 def test_robotics_general_analysis_is_opt_in_and_comparison_only(client, monkeypatch):
     import api.server as server
 
@@ -581,6 +612,25 @@ def test_physical_ai_stream_sync_endpoint_pass_and_fail(client):
     assert failed.json()["verdict"] == "failed"
     assert aligned.json()["verdict"] == "passed"
     assert failed.json()["streams"]["state"]["median_offset_seconds"] == pytest.approx(0.2)
+
+
+def test_stream_sync_requires_two_nonempty_streams_and_enforces_sample_limit(client, monkeypatch):
+    from dataclasses import replace
+
+    import api.server as server
+
+    single = client.post("/v1/streams/sync", json={"streams": {"camera": [0.0]}})
+    empty = client.post("/v1/streams/sync", json={
+        "streams": {"camera": [0.0], "state": []},
+    })
+    monkeypatch.setattr(server, "settings", replace(server.settings, max_rows=3))
+    oversized = client.post("/v1/streams/sync", json={
+        "streams": {"camera": [0.0, 0.1], "state": [0.0, 0.1]},
+    })
+
+    assert single.status_code == 422
+    assert empty.status_code == 422
+    assert oversized.status_code == 413
 
 
 def test_sim_real_compare_endpoint_reports_velocity_drift_and_one_sided_signals(client):

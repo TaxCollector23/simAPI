@@ -90,6 +90,7 @@ class Settings:
     max_upload_bytes: int = _env_int("SIMAPI_MAX_UPLOAD_BYTES", 100 * 1024 * 1024)
     max_recording_rows: int = _env_int("SIMAPI_MAX_RECORDING_ROWS", 10_000)
     max_recording_zip_entries: int = _env_int("SIMAPI_MAX_RECORDING_ZIP_ENTRIES", 10_000)
+    max_kinematics_samples: int = _env_int("SIMAPI_MAX_KINEMATICS_SAMPLES", 10_000)
 
     @property
     def is_production(self) -> bool:

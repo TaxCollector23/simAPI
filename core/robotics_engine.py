@@ -159,6 +159,7 @@ class KinematicsSuite:
         urdf_geometry: URDFGeometry | str,
         joint_signal_map: dict[str, str] | None = None,
         tolerance_m: float = 0.01,
+        max_evaluations: int = 10_000,
     ) -> None:
         if isinstance(urdf_geometry, str):
             urdf_geometry = parse_urdf_geometry(urdf_geometry)
@@ -166,15 +167,22 @@ class KinematicsSuite:
             raise TypeError("urdf_geometry must be URDFGeometry or URDF XML text")
         if not math.isfinite(tolerance_m) or tolerance_m < 0:
             raise ValueError("tolerance_m must be finite and non-negative")
+        if isinstance(max_evaluations, bool) or not isinstance(max_evaluations, int) or max_evaluations < 1:
+            raise ValueError("max_evaluations must be a positive integer")
         self.urdf_geometry = urdf_geometry
         self.joint_signal_map = {
             str(joint): normalize(str(signal)) for joint, signal in (joint_signal_map or {}).items()
         }
         self.tolerance_m = float(tolerance_m)
+        self.max_evaluations = max_evaluations
 
     def run(self, context: RoboticsValidationContext) -> RoboticsSuiteResult:
         columns = {normalize(str(column)) for column in context.data.columns}
         rows = [{normalize(str(key)): value for key, value in row.items()} for row in context.source_rows]
+        if len(rows) > self.max_evaluations:
+            raise ValueError(
+                f"URDF FK evaluation is limited to {self.max_evaluations} sample(s); received {len(rows)}."
+            )
         endpoint_columns = next(
             (signals for signals in self._END_EFFECTOR_COLUMNS if set(signals).issubset(columns)),
             None,

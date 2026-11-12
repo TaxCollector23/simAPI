@@ -91,6 +91,13 @@ def test_stream_sync_fails_mismatched_and_empty_lengths():
     assert empty["streams"]["state"]["samples_compared"] == 0
 
 
+def test_stream_sync_never_passes_without_two_streams():
+    report = check_stream_sync({"camera": []})
+
+    assert report["verdict"] == "insufficient_data"
+    assert report["in_sync"] is False
+
+
 @pytest.mark.parametrize(
     "streams,tolerance",
     [

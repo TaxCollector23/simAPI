@@ -165,3 +165,30 @@ def test_parser_requires_an_unambiguous_chain_or_explicit_links():
     geometry = parse_urdf_geometry(branched, base_link="base", tip_link="left")
     assert geometry.tip_link == "left"
     assert forward_kinematics(geometry, {}) == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_parser_rejects_multi_parent_graphs_and_entity_declarations():
+    multi_parent = """<robot name="multi_parent">
+      <link name="base"/><link name="left"/><link name="right"/><link name="tip"/>
+      <joint name="left_joint" type="fixed"><parent link="base"/><child link="left"/></joint>
+      <joint name="right_joint" type="fixed"><parent link="base"/><child link="right"/></joint>
+      <joint name="left_tip" type="fixed"><parent link="left"/><child link="tip"/></joint>
+      <joint name="right_tip" type="fixed"><parent link="right"/><child link="tip"/></joint>
+    </robot>"""
+    entity_xml = """<!DOCTYPE robot [<!ENTITY name "unsafe">]>
+    <robot name="&name;"><link name="base"/></robot>"""
+
+    with pytest.raises(ValueError, match="more than one parent joint"):
+        parse_urdf_geometry(multi_parent)
+    with pytest.raises(ValueError, match="DTD and entity declarations"):
+        parse_urdf_geometry(entity_xml)
+
+
+def test_kinematics_suite_enforces_evaluation_cap():
+    rows = [{"joint_shoulder_position": 0.0}, {"joint_shoulder_position": 0.1}]
+    suite = KinematicsSuite(TWO_LINK_URDF, _signals(), max_evaluations=1)
+
+    with pytest.raises(ValueError, match="limited to 1 sample"):
+        RoboticsValidationEngine().validate(
+            pd.DataFrame(rows), source_rows=rows, additional_suites=[suite]
+        )

@@ -42,3 +42,16 @@ def test_ftc_missing_time_caps_a_clean_range_pass_to_warning():
 
     assert report["verdict"] == "warning"
     assert report["warnings"][0]["name"] == "time_coverage"
+
+
+def test_ftc_non_numeric_and_non_finite_recognized_signals_fail_closed():
+    non_numeric = validate_ftc_log([{"time": 0.0, "left_motor_power": "not-a-number"}])
+    non_finite = validate_ftc_log([{"time": 0.0, "heading_deg": float("nan")}])
+
+    assert non_numeric["verdict"] == "failed"
+    assert non_numeric["failed_checks"][0]["name"] == "invalid_numeric_signal"
+    assert non_numeric["excluded_rows"] == {
+        "0": ["left_motor_power is missing or non-finite/non-numeric"]
+    }
+    assert non_finite["verdict"] == "failed"
+    assert non_finite["failed_checks"][0]["name"] == "invalid_numeric_signal"
