@@ -7,10 +7,10 @@ export default function PricingPage() {
   return (
     <div className="container-tight pb-24 pt-36">
       <div className="max-w-2xl">
-        <h1 className="text-4xl font-medium">Free to try</h1>
+        <h1 className="text-4xl font-medium">Free while in beta</h1>
         <p className="mt-6 text-lg leading-8">
           Use the hosted playground, CLI, or SDK to evaluate robotics data. No
-          account is required.
+          account or payment is required. There are no paid tiers currently available.
         </p>
         <p className="mt-4 text-base leading-7">
           A validation request accepts up to 10,000 samples. Split larger

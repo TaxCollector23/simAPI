@@ -111,12 +111,8 @@ function FtcLimitsEditor({
 
 export function RoboticsWorkspace({
   example,
-  onOtherDomain,
-  domains,
 }: {
   example: Row[];
-  onOtherDomain: (value: string) => void;
-  domains: { value: string; label: string }[];
 }) {
   const [rows, setRows] = useState<Row[]>([]),
     [raw, setRaw] = useState("[]"),
@@ -328,10 +324,9 @@ export function RoboticsWorkspace({
     <div className="robotics-workspace">
       <div className="flex flex-wrap items-start justify-between gap-6">
         <div>
-          <h1 className="text-3xl font-medium">Robotics validation</h1>
-          <p className="mt-3 max-w-2xl text-base leading-7">
-            Check joint motion, timing, and data quality against the limits you
-            choose.
+          <h2 className="text-xl font-medium">Pre-flight and trajectory validation</h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
+            Load a planned or recorded run, set robot limits, and review timing, motion, and signal checks before using the data.
           </p>
         </div>
         <button
@@ -340,7 +335,7 @@ export function RoboticsWorkspace({
           className="landing-button landing-button-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Play size={17} />
-          {busy ? "Running checks…" : "Run checks"}
+          {busy ? "Running pre-flight…" : "Run pre-flight checks"}
         </button>
       </div>
       <section className="robotics-panel mt-8" aria-label="Load robotics data">
@@ -1107,28 +1102,6 @@ export function RoboticsWorkspace({
             Download run CSV
           </button>
         </div>
-      </details>
-      <details className="mt-8">
-        <summary className="cursor-pointer text-sm">
-          Other validation domains
-        </summary>
-        <select
-          className="mt-4"
-          aria-label="Other validation domains"
-          defaultValue=""
-          onChange={(e) => {
-            if (e.target.value) onOtherDomain(e.target.value);
-          }}
-        >
-          <option value="">Choose a domain</option>
-          {domains
-            .filter((d) => d.value !== "robotics")
-            .map((d) => (
-              <option key={d.value} value={d.value}>
-                {d.label}
-              </option>
-            ))}
-        </select>
       </details>
     </div>
   );

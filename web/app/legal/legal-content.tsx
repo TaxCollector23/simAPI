@@ -19,10 +19,7 @@ export function LegalPage({
             <p className="mt-2 text-sm leading-relaxed text-white/55">{s.body}</p>
           </div>
         ))}
-        <p className="border-t border-white/[0.07] pt-6 text-xs text-white/35">
-          This is placeholder legal copy for a demo deployment and is not legal advice.
-          Replace with counsel-reviewed terms before going to production.
-        </p>
+
       </section>
     </>
   );
