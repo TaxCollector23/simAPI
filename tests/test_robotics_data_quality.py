@@ -19,6 +19,7 @@ from core.ingestion import DataIngester
 from core.report_export import to_junit_xml, to_sarif
 from core.training_data_card import build_training_data_card
 from integrations.lerobot_loader import load_lerobot
+from integrations.recording_limits import RecordingSampleLimitExceeded
 from integrations.ros2_loader import load_rosbag2
 
 TestPlan.__test__ = False
@@ -295,6 +296,48 @@ def test_ros2_loader_rejects_malformed_joint_state_arrays(tmp_path, monkeypatch)
         load_rosbag2(bag_dir)
 
 
+def test_ros2_loader_stops_when_converted_row_cap_is_reached(tmp_path, monkeypatch):
+    bag_dir = tmp_path / "recording"
+    bag_dir.mkdir()
+    connection = SimpleNamespace(topic="/joint_states", msgtype="sensor_msgs/msg/JointState")
+    message = SimpleNamespace(
+        name=["joint_1"], position=[0.1], velocity=[], effort=[],
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=0)),
+    )
+
+    class FakeReader:
+        connections = [connection]
+
+        def __init__(self, _paths):
+            self.messages_read = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def messages(self, connections):
+            for index in range(5):
+                self.messages_read += 1
+                yield connections[0], 1_000_000_000 + index, b"message"
+
+        def deserialize(self, _raw, _type):
+            return message
+
+    rosbags = types.ModuleType("rosbags")
+    rosbags.__path__ = []
+    highlevel = types.ModuleType("rosbags.highlevel")
+    highlevel.AnyReader = FakeReader
+    monkeypatch.setitem(sys.modules, "rosbags", rosbags)
+    monkeypatch.setitem(sys.modules, "rosbags.highlevel", highlevel)
+
+    with pytest.raises(RecordingSampleLimitExceeded) as error:
+        load_rosbag2(bag_dir, max_rows=2)
+    assert error.value.rows == 3
+    assert error.value.limit == 2
+
+
 def test_lerobot_loader_rebases_chunk_episode_ids_and_uses_seconds(tmp_path, monkeypatch):
     dataset = tmp_path / "dataset"
     dataset.mkdir()
@@ -334,3 +377,25 @@ def test_lerobot_loader_rejects_missing_episode_and_state_columns(tmp_path, monk
     monkeypatch.setattr(pd, "read_parquet", lambda _path: pd.DataFrame({"episode_index": [0]}))
     with pytest.raises(ValueError, match="observation.state"):
         load_lerobot(parquet)
+
+
+def test_lerobot_sample_cap_uses_parquet_metadata_before_decoding(tmp_path, monkeypatch):
+    parquet_path = tmp_path / "part.parquet"
+    parquet_path.touch()
+
+    pyarrow = types.ModuleType("pyarrow")
+    parquet_module = types.ModuleType("pyarrow.parquet")
+    parquet_module.ParquetFile = lambda _path: SimpleNamespace(
+        metadata=SimpleNamespace(num_rows=3)
+    )
+    pyarrow.parquet = parquet_module
+    monkeypatch.setitem(sys.modules, "pyarrow", pyarrow)
+    monkeypatch.setitem(sys.modules, "pyarrow.parquet", parquet_module)
+    monkeypatch.setattr(
+        pd, "read_parquet", lambda _path: pytest.fail("parquet data must not be decoded past the cap")
+    )
+
+    with pytest.raises(RecordingSampleLimitExceeded) as error:
+        load_lerobot(parquet_path, max_rows=2)
+    assert error.value.rows == 3
+    assert error.value.limit == 2

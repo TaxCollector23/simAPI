@@ -64,6 +64,7 @@ from core.repair import analyze as repair_analyze
 from core.report_export import to_junit_xml, to_sarif
 from core.robotics_engine import RoboticsValidationEngine
 from core.training_data_card import build_training_data_card
+from integrations.recording_limits import RecordingSampleLimitExceeded
 
 API_VERSION = "3.1.0"
 ROBOTICS_ENGINE = RoboticsValidationEngine()
@@ -1172,14 +1173,25 @@ def _safe_zip_destination(root: Path, name: str) -> Path:
     return destination
 
 
-def _extract_recording_zip(archive_path: Path, destination: Path, max_bytes: int) -> tuple[str, Path]:
+def _extract_recording_zip(
+    archive_path: Path,
+    destination: Path,
+    max_bytes: int,
+    max_entries: int,
+) -> tuple[str, Path]:
     """Extract a bounded ZIP without following links or accepting path traversal."""
     destination.mkdir(parents=True, exist_ok=True)
     total_size = 0
     written_paths: set[Path] = set()
     try:
         with zipfile.ZipFile(archive_path) as bundle:
-            for info in bundle.infolist():
+            entries = bundle.infolist()
+            if len(entries) > max_entries:
+                raise PayloadTooLargeError(
+                    f"Recording ZIP contains {len(entries)} entries; the entry limit is {max_entries}.",
+                    details={"entries": len(entries), "limit": max_entries},
+                )
+            for info in entries:
                 target = _safe_zip_destination(destination, info.filename)
                 if target == destination and not info.is_dir():
                     raise ValueError("ZIP recording contains an empty file path.")
@@ -1255,7 +1267,13 @@ def _extract_recording_zip(archive_path: Path, destination: Path, max_bytes: int
     return "lerobot", destination
 
 
-def _recording_file_kind(path: Path, prefix: bytes, expanded_dir: Path, max_bytes: int) -> tuple[str, Path]:
+def _recording_file_kind(
+    path: Path,
+    prefix: bytes,
+    expanded_dir: Path,
+    max_bytes: int,
+    max_entries: int,
+) -> tuple[str, Path]:
     if prefix.startswith(b"PAR1"):
         return "lerobot", path
     if prefix.startswith(b"SQLite format 3\x00"):
@@ -1263,7 +1281,7 @@ def _recording_file_kind(path: Path, prefix: bytes, expanded_dir: Path, max_byte
     if prefix.startswith(b"\x89MCAP0\r\n"):
         return "mcap", path
     if prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        return _extract_recording_zip(path, expanded_dir, max_bytes)
+        return _extract_recording_zip(path, expanded_dir, max_bytes, max_entries)
     raise SimAPIError(
         "Unsupported recording content. Upload a ROS 2 .db3/.mcap recording, a rosbag2 ZIP, or a LeRobot .parquet/ZIP.",
         code=ErrorCode.UNSUPPORTED_FORMAT,
@@ -1285,7 +1303,11 @@ async def _load_recording_upload(
         expanded_dir = temp_dir / "expanded"
         try:
             recording_format, source_path = _recording_file_kind(
-                raw_path, prefix, expanded_dir, settings.max_upload_bytes
+                raw_path,
+                prefix,
+                expanded_dir,
+                settings.max_upload_bytes,
+                settings.max_recording_zip_entries,
             )
             # Reader plugins dispatch standalone files by their storage suffix.
             # Assign the suffix from the detected content, never from the
@@ -1298,11 +1320,22 @@ async def _load_recording_upload(
             if recording_format == "lerobot":
                 from integrations.lerobot_loader import load_lerobot
 
-                frame = load_lerobot(source_path)
+                frame = await asyncio.to_thread(
+                    load_lerobot, source_path, max_rows=settings.max_recording_rows
+                )
             else:
                 from integrations.ros2_loader import load_rosbag2
 
-                frame = load_rosbag2(source_path, topic_hint=topic_hint)
+                frame = await asyncio.to_thread(
+                    load_rosbag2,
+                    source_path,
+                    topic_hint=topic_hint,
+                    max_rows=settings.max_recording_rows,
+                )
+        except RecordingSampleLimitExceeded as exc:
+            raise PayloadTooLargeError(
+                str(exc), details={"rows": exc.rows, "limit": exc.limit}
+            ) from exc
         except SimAPIError:
             raise
         except RuntimeError as exc:

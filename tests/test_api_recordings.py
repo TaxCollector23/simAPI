@@ -75,15 +75,17 @@ def test_recording_route_detects_content_and_reuses_loaders(
 ):
     seen: dict[str, object] = {}
 
-    def fake_rosbag(path, *, topic_hint):
+    def fake_rosbag(path, *, topic_hint, max_rows):
         seen["loader"] = "rosbag2"
         seen["path"] = path
         seen["topic_hint"] = topic_hint
+        seen["max_rows"] = max_rows
         return _frame()
 
-    def fake_lerobot(path):
+    def fake_lerobot(path, *, max_rows):
         seen["loader"] = "lerobot"
         seen["path"] = path
+        seen["max_rows"] = max_rows
         return _frame()
 
     async def fake_validate(req):
@@ -115,6 +117,7 @@ def test_recording_route_detects_content_and_reuses_loaders(
         assert str(seen["path"]).endswith(expected_suffix)
     if expected_format in {"rosbag2", "mcap"}:
         assert seen["topic_hint"] == "/arm/joint_states"
+    assert seen["max_rows"] == server.settings.max_recording_rows
     request = seen["request"]
     assert request.simulation_type is SimulationType.ROBOTICS
     assert request.robotics_limits == {"joint_1_position": (-1.0, 1.0)}
@@ -124,7 +127,8 @@ def test_recording_route_detects_content_and_reuses_loaders(
 
 
 def test_recording_returns_the_standard_robotics_validation_report(recording_client, monkeypatch):
-    def fake_lerobot(_path):
+    def fake_lerobot(_path, *, max_rows):
+        assert max_rows == server.settings.max_recording_rows
         return _frame(24)
 
     monkeypatch.setattr("integrations.lerobot_loader.load_lerobot", fake_lerobot)
@@ -200,9 +204,26 @@ def test_recording_zip_expansion_limit_is_enforced(recording_client, monkeypatch
     assert "Expanded recording ZIP" in response.json()["error"]["message"]
 
 
+def test_recording_zip_entry_limit_is_enforced_before_extraction(recording_client, monkeypatch):
+    monkeypatch.setattr(
+        server, "settings", replace(server.settings, max_recording_zip_entries=2)
+    )
+    payload = _zip_bytes({"one": b"", "two": b"", "three": b""})
+    response = recording_client.post(
+        "/v1/validate/recording",
+        files={"file": ("many-files.zip", payload, "application/zip")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["details"] == {"entries": 3, "limit": 2}
+
+
 def test_recording_refuses_more_than_configured_sample_limit(recording_client, monkeypatch):
     monkeypatch.setattr(server, "settings", replace(server.settings, max_recording_rows=2))
-    monkeypatch.setattr("integrations.lerobot_loader.load_lerobot", lambda _path: _frame(3))
+    monkeypatch.setattr(
+        "integrations.lerobot_loader.load_lerobot",
+        lambda _path, *, max_rows: _frame(3),
+    )
 
     async def should_not_validate(_req):
         pytest.fail("validation must not run after the converted-row cap is exceeded")
@@ -216,8 +237,30 @@ def test_recording_refuses_more_than_configured_sample_limit(recording_client, m
     assert response.json()["error"]["details"] == {"rows": 3, "limit": 2}
 
 
+def test_recording_loader_sample_limit_uses_payload_too_large_response(recording_client, monkeypatch):
+    from integrations.recording_limits import RecordingSampleLimitExceeded
+
+    monkeypatch.setattr(
+        server, "settings", replace(server.settings, max_recording_rows=2)
+    )
+
+    def over_limit(_path, *, max_rows):
+        assert max_rows == 2
+        raise RecordingSampleLimitExceeded(rows=3, limit=max_rows)
+
+    monkeypatch.setattr("integrations.lerobot_loader.load_lerobot", over_limit)
+    response = recording_client.post(
+        "/v1/validate/recording",
+        files={"file": ("part.parquet", b"PAR1" + b"x" * 20, "application/octet-stream")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["details"] == {"rows": 3, "limit": 2}
+
+
 def test_recording_reports_missing_optional_reader_as_server_capability(recording_client, monkeypatch):
-    def missing_reader(_path):
+    def missing_reader(_path, *, max_rows):
+        assert max_rows == server.settings.max_recording_rows
         raise RuntimeError("LeRobot dataset support requires the optional 'pyarrow' package")
 
     monkeypatch.setattr("integrations.lerobot_loader.load_lerobot", missing_reader)
