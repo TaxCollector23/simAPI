@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { PYTHON_API } from "@/lib/python-backend";
 import { canonical, roboticsEvidenceLimits, type SimulationType } from "@/lib/validation-engine";
 import { buildEvidence } from "@/lib/robotics-workflow.js";
 import { richValidate } from "@/lib/rich-validate";
@@ -270,7 +271,6 @@ export async function POST(req: Request) {
     }
   }
 
-  const PYTHON_API = process.env.PYTHON_API_URL;
   let result;
   let engineSource: "python" | "typescript" = "typescript";
 
@@ -280,6 +280,7 @@ export async function POST(req: Request) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...body,
           data: rows,
           simulation_type: simType,
           conditions: body.conditions ?? {},
@@ -289,12 +290,13 @@ export async function POST(req: Request) {
           ...(body.units ? { units: body.units } : {}),
           run_ai: body.run_ai ?? true,
         }),
-        signal: AbortSignal.timeout(35_000),
+        signal: AbortSignal.timeout(55_000),
       });
       if (upstream.ok) {
         const pyResult = await upstream.json();
         engineSource = "python";
         result = {
+          ...pyResult,
           job_id: requestId.slice(0, 8),
           status: pyResult.status ?? "passed",
           confidence: pyResult.confidence ?? "high",
@@ -326,6 +328,10 @@ export async function POST(req: Request) {
           robotics_summary: pyResult.robotics_summary,
         };
       } else {
+        if (upstream.status < 500) {
+          return NextResponse.json(await upstream.json(), {status: upstream.status,
+            headers: {"X-Request-ID": upstream.headers.get("X-Request-ID") || requestId}});
+        }
         result = body.robotics_profile === "ftc"
           ? mapFtcReport(validateFtcLog(rows, (body.ftc_limits ?? {}) as Partial<FtcLimits>), rows, requestId.slice(0, 8))
           : richValidate(rows, simType, requestId.slice(0, 8), body.robotics_limits, body.conditions);
@@ -388,6 +394,8 @@ export async function POST(req: Request) {
   return NextResponse.json(
     {
       ...result,
+      excluded_indices: [...excludedIdx].sort((a, b) => Number(a) - Number(b)),
+      fallback: engineSource !== "python",
       validation_context: { simulation_type: simType, robotics_limits: body.robotics_limits ?? {}, conditions: body.conditions ?? {}, ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}), ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}), ...(body.units ? { units: body.units } : {}) },
       ...(evidence ? { robotics_evidence: evidence.entries, robotics_evidence_total: evidence.total, robotics_evidence_truncated: evidence.truncated } : {}),
       engine: body.robotics_profile === "ftc"
