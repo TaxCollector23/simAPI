@@ -1,8 +1,10 @@
 """Convert declared robotics input units to the engine's canonical units.
 
-Joint positions use radians, angular velocities use radians per second, and
-torque/effort use newton metres. Limit values are canonical by default; an
-optional ``limit_units`` mapping can declare non-canonical bound units.
+Revolute positions use radians, prismatic positions use metres, and velocities
+use the corresponding per-second unit. Rotational torque/effort uses newton
+metres; prismatic joint effort uses newtons when its URDF type is known. Limit
+values are canonical by default; an optional ``limit_units`` mapping can
+declare non-canonical bound units.
 """
 from __future__ import annotations
 
@@ -22,13 +24,15 @@ def _factor(signal: str, unit: str, *, is_prismatic: bool = False) -> float:
         supported = {"m": 1.0} if is_prismatic else {"rad": 1.0, "deg": math.pi / 180.0}
     elif signal.endswith("_velocity"):
         supported = {"m/s": 1.0} if is_prismatic else {"rad/s": 1.0, "deg/s": math.pi / 180.0}
-    elif signal.endswith(("_torque", "_effort")):
+    elif signal.endswith("_torque"):
         supported = {"nm": 1.0}
+    elif signal.endswith("_effort"):
+        supported = {"n": 1.0} if is_prismatic else {"nm": 1.0}
     elif signal.endswith("_force"):
         supported = {"n": 1.0}
     else:
         raise ValueError(
-            f"Units can only be declared for joint position, velocity, torque, or effort signals; got '{signal}'."
+            f"Units can only be declared for joint position, velocity, torque, effort, or force signals; got '{signal}'."
         )
     try:
         return supported[unit]
@@ -59,9 +63,9 @@ def convert_robotics_inputs(
     """Return converted input copies and conversion metadata.
 
     ``units`` describes values in the submitted data. Robot limit bounds are
-    already canonical radians / radians per second / Nm unless a caller
-    explicitly supplies ``limit_units``. A unit declaration must name a signal
-    that is actually present in the data.
+    already canonical radians, metres, per-second units, rotational Nm, or
+    prismatic-effort N unless a caller explicitly supplies ``limit_units``.
+    A unit declaration must name a signal that is actually present in the data.
     """
     unit_map = units or {}
     limit_unit_map = limit_units or {}
@@ -90,11 +94,16 @@ def convert_robotics_inputs(
                 "rad" if normalized.endswith("_position") else
                 "m/s" if normalized.endswith("_velocity") and is_prismatic else
                 "rad/s" if normalized.endswith("_velocity") else
+                "N" if normalized.endswith("_effort") and is_prismatic else
                 "Nm"
             )
             conversions[normalized] = f"{str(unit).strip().lower()}->{target}"
-        elif is_prismatic and str(unit).strip().lower() in {"m", "m/s"}:
-            target = "m" if normalized.endswith("_position") else "m/s"
+        elif is_prismatic and str(unit).strip().lower() in {"m", "m/s", "n"}:
+            target = (
+                "m" if normalized.endswith("_position") else
+                "m/s" if normalized.endswith("_velocity") else
+                "N"
+            )
             conversions[normalized] = f"{str(unit).strip().lower()}->{target}"
 
     for declared_signal, unit in limit_unit_map.items():

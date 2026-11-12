@@ -41,7 +41,7 @@ one embarrassing problem and a handful of useful extras:
 
 Words used below:
   - "signal"  = one measured column, e.g. joint_1_position.
-  - "torque"  = how hard a motor pushes, in Nm (also "effort" in ROS).
+  - "torque"  = rotational effort in Nm; ROS prismatic-joint effort is force in N.
   - "screening profile" = realistic-but-generic limits used to catch
     nonsense. NOT a substitute for the robot's own URDF/datasheet.
 
