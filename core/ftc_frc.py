@@ -276,8 +276,11 @@ def validate_ftc_log(rows: list[dict[str, Any]],
             if p0 is None or p1 is None:
                 continue
             derived = (p1 - p0) / dt
-            vel_col = col[: -len("position")] + "velocity" if col.endswith("_position") else None
-            reported = _num(row.get(vel_col)) if vel_col else None
+            if col.endswith("_position"):
+                vel_col = col[: -len("_position")] + "_velocity"
+            else:
+                vel_col = col[: -len("_encoder")] + "_encoder_velocity"
+            reported = _num(row.get(vel_col))
             if reported is not None and abs(derived - reported) > cfg["velocity_tolerance"]:
                 fail("encoder_velocity", idx,
                      f"row {idx}: {col} implies {derived:g}/s but "
