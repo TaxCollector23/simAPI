@@ -154,3 +154,23 @@ def test_clean_export_drops_failed_single_unnamed_episode():
     assert clean == []
     assert report["rows_out"] == 0
     assert report["removed_episodes"][0]["episode_id"] == "Episode 1"
+
+
+def test_unprofiled_screening_warning_caps_episode_and_dataset_readiness():
+    report = episode_quality([{"episode_id": "unprofiled", "joint_1_torque": 25.0}])
+
+    episode = report["episodes"][0]
+    assert episode["verdict"] == "warning"
+    assert episode["training_ready"] is False
+    assert report["verdict"] == "warning"
+    assert report["summary"]["training_ready_episodes"] == 0
+    assert report["summary"]["removed_episodes"] == 1
+
+
+def test_other_unrelated_engine_warnings_do_not_change_physical_ai_verdict():
+    report = episode_quality([{"episode_id": "no_joint_signal", "temperature": 25.0}])
+
+    episode = report["episodes"][0]
+    assert episode["verdict"] == "passed"
+    assert episode["training_ready"] is True
+    assert report["verdict"] == "passed"
