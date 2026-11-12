@@ -28,3 +28,8 @@ npm run build      # production build
 
 Zero-config on Vercel (framework auto-detected). Any Node host works via
 `npm run build && npm start`.
+
+The sim-to-real comparison panel uses the Python comparison endpoint. Set
+`PYTHON_API_URL` on the web deployment to the Python service URL. If that
+service requires API-key authentication, set `PYTHON_API_KEY` to a key accepted
+by its `SIMAPI_API_KEYS` configuration.
