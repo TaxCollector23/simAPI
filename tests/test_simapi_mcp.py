@@ -131,7 +131,13 @@ def test_http_authenticated_tools_and_recording_upload():
             request_id=3,
         )
         assert report["isError"] is False
-        assert _tool_json(report)["verdict"] == "passed"
+        tool_report = _tool_json(report)
+        # Incomplete telemetry may legitimately produce a warning even when
+        # the tool call succeeds. The MCP adapter must preserve that warning
+        # instead of presenting it as a clean pass.
+        assert tool_report["verdict"] in {"passed", "warning"}
+        if tool_report["verdict"] == "warning":
+            assert tool_report["warning_checks"]
 
         blocked = _call_tool(
             client,
