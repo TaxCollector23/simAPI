@@ -9,11 +9,40 @@ test('clean export removes whole failed episodes, even when rows are interleaved
     { episode_id: 'clean', t: 1, value: 'ok-2' },
     { episode_id: 'bad', t: 1, value: 'drop-2' },
   ];
-  const report = { episode_quality: { episodes: [
+  const report = { training_ready: false, episode_quality: { episodes: [
     { episode_id: 'clean', verdict: 'passed', failure_labels: [] },
     { episode_id: 'bad', verdict: 'failed', failure_labels: ['limit_violation'] },
   ] } };
   assert.deepEqual(extras._cleanEpisodeRows(rows, report).rows, [rows[0], rows[2]]);
+});
+
+test('summary-only episodes are not trusted when the overall report failed', () => {
+  const rows = [{ episode_id: 'maybe-clean', t: 0, value: 1 }];
+  const report = {
+    training_ready: false,
+    robotics_summary: { episodes: [
+      { episode_id: 'maybe-clean', flagged_samples: 0 },
+    ] },
+  };
+
+  const selection = extras._cleanEpisodeRows(rows, report);
+  assert.deepEqual(selection.rows, []);
+  assert.match(selection.reason, /overall report is not training ready/i);
+});
+
+test('an episode-quality error disables clean export even if a summary has no flags', () => {
+  const rows = [{ episode_id: 'unknown-quality', t: 0, value: 1 }];
+  const report = {
+    training_ready: true,
+    episode_quality: { error: 'quality calculation failed' },
+    robotics_summary: { episodes: [
+      { episode_id: 'unknown-quality', flagged_samples: 0 },
+    ] },
+  };
+
+  const selection = extras._cleanEpisodeRows(rows, report);
+  assert.deepEqual(selection.rows, []);
+  assert.match(selection.reason, /episode quality could not be computed/i);
 });
 
 test('an unnamed failed episode exports no rows; an unnamed passing one keeps them', () => {

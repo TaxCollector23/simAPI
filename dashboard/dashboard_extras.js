@@ -11,8 +11,15 @@
 
   var EPISODE_KEYS = ["episode_id", "episode", "trajectory_id", "sequence_id"];
 
+  function episodeQualityErrored(report) {
+    var quality = report && report.episode_quality;
+    return Boolean(quality && typeof quality === "object" &&
+      Object.prototype.hasOwnProperty.call(quality, "error"));
+  }
+
   function episodesOf(report) {
     if (!report || typeof report !== "object") return [];
+    if (episodeQualityErrored(report)) return [];
     if (report.episode_quality && Array.isArray(report.episode_quality.episodes)) {
       return report.episode_quality.episodes;
     }
@@ -92,6 +99,17 @@
   function cleanEpisodeRows(rows, report) {
     if (!Array.isArray(rows) || !rows.length) {
       return { rows: [], reason: "No sample rows are available." };
+    }
+    if (episodeQualityErrored(report)) {
+      return { rows: [], reason: "Episode quality could not be computed; clean export is disabled." };
+    }
+    var hasEpisodeQuality = Boolean(report && report.episode_quality &&
+      Array.isArray(report.episode_quality.episodes));
+    if (!hasEpisodeQuality && report && report.training_ready === false) {
+      return {
+        rows: [],
+        reason: "The overall report is not training ready, and per-episode quality is unavailable."
+      };
     }
     var episodes = episodesOf(report);
     if (!episodes.length) {
