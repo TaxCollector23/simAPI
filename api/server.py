@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -59,6 +59,7 @@ from core.physics_validator import PhysicsValidator, SimulationType
 from core.repair import analyze as repair_analyze
 from core.report_export import to_junit_xml, to_sarif
 from core.robotics_engine import RoboticsValidationEngine
+from core.robotics_units import convert_robotics_inputs
 from core.training_data_card import build_training_data_card
 
 API_VERSION = "3.1.0"
@@ -108,6 +109,20 @@ JOBS: dict[str, dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 
 
+def _validate_robotics_limits(value: dict[str, tuple[float, float]]):
+    for signal, (low, high) in value.items():
+        if not signal.strip() or not math.isfinite(low) or not math.isfinite(high) or low >= high:
+            raise ValueError("Robot limits require non-empty signal names and finite minimum < maximum")
+    return value
+
+
+def _validate_trajectory_options(value: dict[str, float]):
+    for key in ("max_time_step", "velocity_tolerance", "acceleration_tolerance"):
+        if key in value and (not math.isfinite(value[key]) or value[key] <= 0):
+            raise ValueError(f"{key} must be a finite positive number")
+    return value
+
+
 # ── Request / response models ───────────────────────────────────────────────────
 class ValidateRequest(BaseModel):
     """Payload for JSON validation requests."""
@@ -119,22 +134,56 @@ class ValidateRequest(BaseModel):
     conditions: dict[str, float] = Field(default_factory=dict, description="Input boundary conditions.")
     robotics_limits: dict[str, tuple[float, float]] = Field(
         default_factory=dict,
-        description="Optional per-signal robot limits, e.g. {'joint_1_position': [-1.57, 1.57]}.",
+        description="Optional per-signal robot limits in canonical units (rad, rad/s, Nm).",
     )
+    units: dict[str, str] = Field(default_factory=dict, description="Units of submitted robotics signals; positions: rad|deg, velocities: rad/s|deg/s, torque/effort: Nm.")
+    robotics_limit_units: dict[str, str] = Field(default_factory=dict, description="Optional units for limit bounds; omitted limits are canonical (rad, rad/s, Nm).")
+    run_general: bool = Field(default=False, description="For robotics requests, also run general dimensional/APIE analysis for comparison only.")
+    robotics_profile: Literal["ftc", "frc"] | None = Field(default=None, description="Optional school-robot telemetry profile; only valid with simulation_type=robotics.")
+    ftc_limits: dict[str, Any] = Field(default_factory=dict, description="Optional FTC/FRC screening thresholds, such as motor_power or heading_jump_deg.")
+    urdf_xml: str | None = Field(default=None, description="Optional URDF XML for forward-kinematics consistency checks.")
     @field_validator("conditions")
     @classmethod
     def validate_trajectory_options(cls, value):
-        for key in ("max_time_step", "velocity_tolerance", "acceleration_tolerance"):
-            if key in value and (not math.isfinite(value[key]) or value[key] <= 0):
-                raise ValueError(f"{key} must be a finite positive number")
-        return value
+        return _validate_trajectory_options(value)
 
     @field_validator("robotics_limits")
     @classmethod
     def validate_robot_limits(cls, value):
-        for signal, (low, high) in value.items():
-            if not signal.strip() or not math.isfinite(low) or not math.isfinite(high) or low >= high:
-                raise ValueError("Robot limits require non-empty signal names and finite minimum < maximum")
+        return _validate_robotics_limits(value)
+
+    @field_validator("ftc_limits")
+    @classmethod
+    def validate_ftc_profile_limits(cls, value):
+        ranges = {"motor_power", "battery_voltage"}
+        for name, limit in value.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("FTC limit names must be non-empty strings")
+            if name in ranges:
+                if isinstance(limit, (str, bytes)):
+                    raise ValueError(f"ftc_limits[{name!r}] must be a finite [min, max] pair")
+                try:
+                    low, high = limit
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"ftc_limits[{name!r}] must be a finite [min, max] pair") from exc
+                numeric_bounds = all(
+                    isinstance(bound, (int, float))
+                    and not isinstance(bound, bool)
+                    and math.isfinite(bound)
+                    for bound in (low, high)
+                )
+                if not numeric_bounds or low >= high:
+                    raise ValueError(f"ftc_limits[{name!r}] must have finite minimum < maximum")
+            else:
+                if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(limit):
+                    raise ValueError(f"ftc_limits[{name!r}] must be finite numeric")
+        return value
+
+    @field_validator("urdf_xml")
+    @classmethod
+    def validate_urdf_size(cls, value):
+        if value is not None and len(value.encode("utf-8")) > 2 * 1024 * 1024:
+            raise ValueError("urdf_xml exceeds the 2 MiB request limit")
         return value
 
     job_id: str | None = Field(default=None, description="Optional caller-supplied tracking id.")
@@ -155,6 +204,47 @@ class ValidateRequest(BaseModel):
         description="Correct a wrong units mapping, e.g. {'v': 'volume'} if the engine guessed "
         "velocity. Re-run with this set after inspecting the units-resolved list in a prior response.",
     )
+
+
+class StreamSyncRequest(BaseModel):
+    streams: dict[str, list[float]] = Field(..., description="Timestamp arrays keyed by stream name.")
+    tolerance_seconds: float = Field(default=0.05, ge=0)
+
+    @field_validator("streams")
+    @classmethod
+    def validate_stream_times(cls, value):
+        if not value:
+            raise ValueError("At least one timestamp stream is required")
+        if any(not math.isfinite(timestamp) for timestamps in value.values() for timestamp in timestamps):
+            raise ValueError("Stream timestamps must be finite numbers")
+        return value
+
+    @field_validator("tolerance_seconds")
+    @classmethod
+    def validate_sync_tolerance(cls, value):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("tolerance_seconds must be finite and non-negative")
+        return value
+
+
+class CompareSimRealRequest(BaseModel):
+    sim_data: list[dict[str, Any]] = Field(..., description="Simulated robotics samples.")
+    real_data: list[dict[str, Any]] = Field(..., description="Real-robot samples.")
+    robotics_limits: dict[str, tuple[float, float]] = Field(default_factory=dict)
+    conditions: dict[str, float] = Field(default_factory=dict)
+    sim_units: dict[str, str] = Field(default_factory=dict, description="Units declared for simulation signals.")
+    real_units: dict[str, str] = Field(default_factory=dict, description="Units declared for real-robot signals.")
+    robotics_limit_units: dict[str, str] = Field(default_factory=dict, description="Units of shared limit bounds; canonical by default.")
+
+    @field_validator("robotics_limits")
+    @classmethod
+    def validate_compare_robot_limits(cls, value):
+        return _validate_robotics_limits(value)
+
+    @field_validator("conditions")
+    @classmethod
+    def validate_compare_conditions(cls, value):
+        return _validate_trajectory_options(value)
 
 
 class RepairRequest(BaseModel):
@@ -826,7 +916,9 @@ def _run_ai_async(job_id: str, df: pd.DataFrame, sim_type: str,
                 physics["exclusion_rate"] = round(physics["trials_excluded"] / sub, 4)
             ai_sev = {"passed": 0, "warning": 1, "failed": 2, "error": 0, "disabled": 0}.get(ai_data["status"], 0)
             ph_sev = {"passed": 0, "warning": 1, "failed": 2}.get(physics["status"], 0)
-            if ai_sev > ph_sev:
+            # Robotics is governed by the deterministic robotics suite. The AI
+            # explanation is retained but cannot rewrite its verdict.
+            if "robotics_checks" not in physics and ai_sev > ph_sev:
                 physics["status"] = ai_data["status"]
                 if ai_data.get("anomaly_score", 0) > 0.5:
                     physics["training_ready"] = False
@@ -854,6 +946,313 @@ except Exception:
     APIE_AVAILABLE = False
 
 
+async def _validate_robotics_core(
+    req: ValidateRequest,
+    df: pd.DataFrame,
+    ingest_meta: dict[str, Any],
+    jid: str,
+) -> dict[str, Any]:
+    """Run robotics checks as the verdict source; expose other engines only as comparisons."""
+    if req.robotics_profile in {"ftc", "frc"}:
+        return await _validate_ftc_profile(req, jid)
+    if req.robotics_profile is not None and req.simulation_type != SimulationType.ROBOTICS:
+        raise SimAPIError(
+            "robotics_profile is only valid when simulation_type is 'robotics'.",
+            code=ErrorCode.BAD_REQUEST,
+        )
+    try:
+        df, source_rows, limits, conversions = convert_robotics_inputs(
+            df,
+            req.data,
+            req.units,
+            req.robotics_limits,
+            req.robotics_limit_units,
+        )
+    except ValueError as exc:
+        raise SimAPIError(str(exc), code=ErrorCode.BAD_REQUEST) from exc
+    df.attrs["simapi_renamed"] = ingest_meta.get("columns_renamed", {})
+
+    started = time.perf_counter()
+    robotics = await asyncio.to_thread(
+        ROBOTICS_ENGINE.validate,
+        df,
+        limits,
+        source_rows=source_rows,
+        conditions=req.conditions,
+    )
+    processing_ms = round((time.perf_counter() - started) * 1000.0, 1)
+    if conversions:
+        robotics["summary"]["unit_conversions"] = conversions
+
+    statistics = _dimensional_stats(df)
+    base = {
+        "job_id": jid,
+        "status": "passed",
+        "confidence": "high",
+        "plain_summary": "Robotics checks passed for all submitted samples.",
+        "concrete_fixes": [],
+        "trials_submitted": len(df),
+        "trials_valid": len(df),
+        "trials_excluded": 0,
+        "exclusion_rate": 0.0,
+        "training_ready": True,
+        "processing_ms": processing_ms,
+        "all_checks": 0,
+        "unique_checks": 0,
+        "passed": 0,
+        "warnings": 0,
+        "failed": 0,
+        "informational": 0,
+        "issues": [],
+        "physics_checks": [],
+        "exclusions": [],
+        "statistics": statistics,
+        "statistics_plain": _stats_plain_language(statistics),
+        "checks_by_category": {},
+        "laws_confirmed": [],
+        "training_suitability": [],
+        "surface_diagnostics": {},
+        "provenance": {
+            "engine": "robotics",
+            "engine_version": robotics.get("summary", {}).get("engine_version"),
+        },
+        "columns_renamed": ingest_meta.get("columns_renamed", {}),
+        "ai": None,
+        "ai_status": "pending",
+        "ai_exclusions": [],
+    }
+    # Keep the compatibility alias attached to the same list as _merge appends findings.
+    base["physics_checks"] = base["issues"]
+    result = _merge_robotics_limits(base, robotics)
+    result["validation_context"] = {
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+        "conditions": req.conditions,
+        "units": req.units,
+    }
+
+    # The legacy engine remains useful while comparing migration results, but it
+    # is explicitly non-authoritative and cannot affect status or exclusions.
+    try:
+        physics = await asyncio.to_thread(
+            validator.validate, df, req.simulation_type, req.conditions, jid
+        )
+        legacy = _serialize(physics, df)
+        result["legacy_physics"] = {
+            "comparison_only": True,
+            "status": legacy["status"],
+            "trials_excluded": legacy["trials_excluded"],
+            "all_checks": legacy["all_checks"],
+            "issues": legacy["issues"][:20],
+        }
+    except Exception:
+        result["legacy_physics"] = {"comparison_only": True, "status": "unavailable"}
+
+    if req.run_general:
+        general_started = time.perf_counter()
+        dimensional_report = await asyncio.to_thread(
+            dimensional_validate,
+            df,
+            conditions=req.conditions,
+            llm_resolver=openrouter_llm_resolver,
+            unit_overrides=req.unit_overrides,
+        )
+        general = _serialize_dimensional(
+            dimensional_report,
+            df,
+            jid,
+            round((time.perf_counter() - general_started) * 1000.0, 1),
+        )
+        general["comparison_only"] = True
+        result["general_analysis"] = general
+
+        if APIE_AVAILABLE and _apie_engine is not None:
+            try:
+                domain_str = req.simulation_type.value
+                apie_result = await asyncio.to_thread(
+                    _apie_engine.validate,
+                    df,
+                    domain=domain_str,
+                    conditions=dict(req.conditions or {}),
+                    risk_mode="precision",
+                )
+                dx = apie_result.diagnosis
+                result["apie"] = {
+                    "comparison_only": True,
+                    "version": "3.1",
+                    "domain_profile": apie_result.domain_profile,
+                    "discovered_invariants": apie_result.discovered_invariants,
+                    "ai_used": apie_result.ai_used,
+                    "processing_ms": apie_result.processing_ms,
+                    "checks_run": [c["check"] for c in apie_result.test_plan.checks],
+                    "suspected_corruption": {
+                        k: round(v, 2)
+                        for k, v in apie_result.test_plan.suspected_corruption_types.items()
+                        if v > 0.2
+                    },
+                    "flagged_for_review": apie_result.flagged_for_review[:20],
+                    "total_exclusions": len(apie_result.excluded_indices),
+                    "n_flagged_review": len(apie_result.flagged_for_review),
+                    "diagnosis": {
+                        "primary_finding": dx.matched_failure_modes[0]["failure_mode"]
+                        if dx and dx.matched_failure_modes else "none",
+                        "pipeline_stage": dx.pipeline_stage if dx else "unknown",
+                        "causal_chain": dx.causal_chain[:3] if dx else [],
+                        "investigation_steps": dx.investigation_steps[:3] if dx else [],
+                        "confidence": dx.confidence if dx else 0,
+                        "counterfactual_impact": dx.counterfactual_impact[:300] if dx else "",
+                    } if dx else None,
+                    "cross_run": None,
+                }
+            except Exception as exc:
+                result["apie"] = {"comparison_only": True, "error": str(exc), "version": "3.1"}
+
+    if robotics.get("summary", {}).get("episodes"):
+        try:
+            from core.physical_ai import episode_quality
+            result["episode_quality"] = episode_quality(
+                source_rows,
+                robotics_limits=limits,
+                conditions=req.conditions,
+            )
+        except Exception as exc:
+            # Preserve a valid primary robotics report if the optional
+            # per-episode explanation layer fails.
+            result["episode_quality"] = {"error": str(exc)}
+
+    result["columns_renamed"] = ingest_meta.get("columns_renamed", {})
+    result["ai_status"] = "pending" if (req.run_ai and AI_ENABLED) else "disabled"
+    with _JOBS_LOCK:
+        JOBS[jid] = {"physics": result, "ai_running": False, "ts": time.time()}
+        _prune_jobs()
+
+    metrics.incr("physics_validations_total", status=result["status"])
+    if req.run_ai and (AI_ENABLED or ORCHESTRATOR_ENABLED):
+        context = {}
+        if req.geometry_description:
+            context["geometry_description"] = req.geometry_description
+        if req.what_are_you_measuring:
+            context["what_are_you_measuring"] = req.what_are_you_measuring
+        if req.expected_output_ranges:
+            context["expected_output_ranges"] = req.expected_output_ranges
+        if req.known_issues:
+            context["known_issues"] = req.known_issues
+        if req.ml_model_type:
+            context["ml_model_type"] = req.ml_model_type
+        threading.Thread(
+            target=_run_ai_async,
+            args=(jid, df, req.simulation_type.value, req.conditions, result["issues"]),
+            kwargs={"physics_result": result, "context": context or None, "deep_ai": req.deep_ai},
+            daemon=True,
+        ).start()
+    return _json_safe(result)
+
+
+async def _validate_ftc_profile(req: ValidateRequest, jid: str) -> dict[str, Any]:
+    """Adapt FTC/FRC telemetry checks to SimAPI's standard validation response."""
+    from core.ftc_frc import validate_ftc_log
+
+    if req.simulation_type != SimulationType.ROBOTICS:
+        raise SimAPIError(
+            "robotics_profile is only valid when simulation_type is 'robotics'.",
+            code=ErrorCode.BAD_REQUEST,
+        )
+    raw = await asyncio.to_thread(validate_ftc_log, req.data, req.ftc_limits or None)
+    failed_checks = list(raw.get("failed_checks", []))
+    warning_checks = list(raw.get("warnings", []))
+    check_rows = [
+        {**check, "status": "failed"} for check in failed_checks
+    ] + [
+        {**check, "status": "warning"} for check in warning_checks
+    ]
+    failures = len(failed_checks)
+    warnings = len(warning_checks)
+    status = "failed" if failures else "warning" if warnings else "passed"
+    training_ready = status == "passed"
+    exclusions = []
+    for raw_index, reasons in (raw.get("excluded_rows") or {}).items():
+        index = int(raw_index)
+        exclusions.append({
+            "trial_number": index + 1,
+            "trial_index": index,
+            "reason": "; ".join(reasons),
+            "severity": "critical",
+        })
+    issues = [
+        {
+            "name": check["name"],
+            "human_name": f"FTC/FRC {check['name'].replace('_', ' ')}",
+            "status": check["status"],
+            "description": check["detail"],
+            "detail": check["detail"],
+            "value": None,
+            "category": "ftc_frc",
+        }
+        for check in check_rows
+    ]
+    rows = len(req.data)
+    summary = dict(raw.get("summary", {}))
+    summary.update({
+        "engine_version": "ftc-frc-1",
+        "limits_source": "ftc_profile",
+        "profile": req.robotics_profile,
+        "episodes": list(raw.get("episodes", [])),
+    })
+    result = {
+        "job_id": jid,
+        "domain": "robotics",
+        "profile": req.robotics_profile,
+        "status": status,
+        "confidence": "low" if failures else "medium" if warnings else "high",
+        "plain_summary": (
+            "FTC/FRC telemetry checks found failures. Review affected samples."
+            if failures else "FTC/FRC telemetry checks found warnings. Review them before training."
+            if warnings else "FTC/FRC telemetry checks passed."
+        ),
+        "concrete_fixes": [],
+        "trials_submitted": rows,
+        "trials_valid": max(0, rows - len(exclusions)),
+        "trials_excluded": len(exclusions),
+        "exclusion_rate": round(len(exclusions) / rows, 4) if rows else 0.0,
+        "training_ready": training_ready,
+        "processing_ms": 0.0,
+        "all_checks": len(check_rows),
+        "unique_checks": len(check_rows),
+        "passed": 0,
+        "warnings": warnings,
+        "failed": failures,
+        "informational": 0,
+        "issues": issues,
+        "physics_checks": issues,
+        "exclusions": exclusions,
+        "statistics": {},
+        "statistics_plain": {},
+        "checks_by_category": {
+            "ftc_frc": {"passed": 0, "warning": warnings, "failed": failures}
+        },
+        "laws_confirmed": [],
+        "training_suitability": [],
+        "surface_diagnostics": {},
+        "provenance": {"engine": "ftc_frc", "profile": req.robotics_profile},
+        "robotics_checks": check_rows,
+        "robotics_summary": summary,
+        "robotics_warnings": warning_checks,
+        "robotics_evidence": [],
+        "robotics_evidence_total": 0,
+        "robotics_evidence_truncated": False,
+        "ftc_frc_report": raw,
+        "validation_context": {"simulation_type": "robotics", "profile": req.robotics_profile, "ftc_limits": req.ftc_limits},
+        "ai": None,
+        "ai_status": "disabled",
+        "ai_exclusions": [],
+    }
+    with _JOBS_LOCK:
+        JOBS[jid] = {"physics": result, "ai_running": False, "ts": time.time()}
+        _prune_jobs()
+    metrics.incr("physics_validations_total", status=status)
+    return _json_safe(result)
+
+
 async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     if len(req.data) > settings.max_rows:
         raise PayloadTooLargeError(
@@ -866,6 +1265,8 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     df.attrs["simapi_renamed"] = ingest_meta.get("columns_renamed", {})
 
     jid = req.job_id or uuid.uuid4().hex[:8]
+    if req.simulation_type == SimulationType.ROBOTICS:
+        return await _validate_robotics_core(req, df, ingest_meta, jid)
 
     # ── Primary engine: dimensional analysis (core/dimensional/) ───────────
     # Replaces the old hand-written-check engine (PhysicsValidator, ~470-885
@@ -887,16 +1288,6 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
         unit_overrides=req.unit_overrides)
     _dim_ms = round((time.perf_counter() - _t0) * 1000, 1)
     result = _serialize_dimensional(dim_report, df, jid, _dim_ms)
-
-    if req.simulation_type == SimulationType.ROBOTICS:
-        robotics = ROBOTICS_ENGINE.validate(
-            df,
-            req.robotics_limits,
-            source_rows=req.data,
-            conditions=req.conditions,
-        )
-        result = _merge_robotics_limits(result, robotics)
-        result["validation_context"] = {"simulation_type": "robotics", "robotics_limits": req.robotics_limits, "conditions": req.conditions}
 
     # Legacy check-based engine kept available, non-authoritative: its
     # findings are exposed under `legacy_physics` for comparison/migration
@@ -1036,6 +1427,7 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
             check["status"] = "info"
     result["robotics_checks"] = checks
     result["robotics_summary"] = robotics["summary"]
+    result["robotics_warnings"] = list(robotics.get("screening_warnings", []))
     evidence = robotics.get("evidence", {"entries": [], "total": 0, "truncated": False})
     result["robotics_evidence"] = evidence["entries"]
     result["robotics_evidence_total"] = evidence["total"]
@@ -1075,7 +1467,7 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
     result["exclusion_rate"] = round(len(seen) / result["trials_submitted"], 4) if result["trials_submitted"] else 0.0
 
     for check in checks:
-        if check["status"] == "passed":
+        if check["status"] in {"passed", "info"}:
             continue
         result["issues"].append({
             "name": check["name"],
@@ -1121,6 +1513,56 @@ async def health() -> dict[str, Any]:
 async def prometheus_metrics() -> str:
     """Prometheus text-format metrics for scraping."""
     return metrics.render()
+
+
+# ── Physical-AI synchronization endpoint ─────────────────────────────────────────
+@app.post("/v1/streams/sync", tags=["validation"])
+async def validate_stream_sync(req: StreamSyncRequest, _: str = Depends(caller_identity)):
+    """Compare camera/state/action clocks using the fixed Physical-AI sync report."""
+    from core.physical_ai import check_stream_sync
+
+    return check_stream_sync(req.streams, req.tolerance_seconds)
+
+
+@app.post("/v1/compare/sim-real", tags=["validation"])
+async def compare_sim_real_endpoint(req: CompareSimRealRequest, _: str = Depends(caller_identity)):
+    """Validate and compare simulation/real robotics distributions without LLM calls."""
+    if len(req.sim_data) > settings.max_rows or len(req.real_data) > settings.max_rows:
+        rows = max(len(req.sim_data), len(req.real_data))
+        raise PayloadTooLargeError(
+            f"Each dataset is limited to {settings.max_rows} rows.",
+            details={"rows": rows, "limit": settings.max_rows},
+        )
+    sim_frame, _ = ingester.ingest(req.sim_data, format_hint="json")
+    real_frame, _ = ingester.ingest(req.real_data, format_hint="json")
+    try:
+        sim_frame, sim_rows, sim_limits, sim_conversions = convert_robotics_inputs(
+            sim_frame, req.sim_data, req.sim_units, req.robotics_limits, req.robotics_limit_units
+        )
+        real_frame, real_rows, real_limits, real_conversions = convert_robotics_inputs(
+            real_frame, req.real_data, req.real_units, req.robotics_limits, req.robotics_limit_units
+        )
+    except ValueError as exc:
+        raise SimAPIError(str(exc), code=ErrorCode.BAD_REQUEST) from exc
+    sim_report = await asyncio.to_thread(
+        ROBOTICS_ENGINE.validate,
+        sim_frame,
+        sim_limits,
+        source_rows=sim_rows,
+        conditions=req.conditions,
+    )
+    real_report = await asyncio.to_thread(
+        ROBOTICS_ENGINE.validate,
+        real_frame,
+        real_limits,
+        source_rows=real_rows,
+        conditions=req.conditions,
+    )
+    from core.sim_real import compare_sim_real
+
+    result = compare_sim_real(sim_frame, real_frame, sim_report, real_report)
+    result["unit_conversions"] = {"sim": sim_conversions, "real": real_conversions}
+    return result
 
 
 # ── Validation endpoints ─────────────────────────────────────────────────────────

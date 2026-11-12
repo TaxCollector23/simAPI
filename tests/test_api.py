@@ -1,5 +1,20 @@
 """End-to-end API contract tests."""
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_api_test_rate_limit():
+    from api import server
+
+    previous = server.app.dependency_overrides.get(server.caller_identity)
+    server.app.dependency_overrides[server.caller_identity] = lambda: "api-contract-tests"
+    yield
+    if previous is None:
+        server.app.dependency_overrides.pop(server.caller_identity, None)
+    else:
+        server.app.dependency_overrides[server.caller_identity] = previous
+
 
 def test_health_ok(client):
     r = client.get("/v1/health")
@@ -251,3 +266,172 @@ def test_validate_dimensional_catches_unit_swap(client):
     assert r.status_code == 200
     body = r.json()
     assert 5 in body["impossible"]
+
+
+def test_robotics_fast_path_skips_general_engine_by_default(client, monkeypatch):
+    import api.server as server
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("dimensional engine should be opt-in for robotics")
+
+    monkeypatch.setattr(server, "dimensional_validate", should_not_run)
+    data = [
+        {"episode_id": "run-a", "time": 0.0, "joint_1_position": 0.0},
+        {"episode_id": "run-a", "time": 0.1, "joint_1_position": 0.1},
+        {"episode_id": "run-b", "time": 0.0, "joint_1_position": 0.2},
+        {"episode_id": "run-b", "time": 0.1, "joint_1_position": 0.3},
+    ]
+    response = client.post("/v1/validate/physics-only", json={
+        "data": data,
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_1_position": [-1.0, 1.0]},
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    direct = server.ROBOTICS_ENGINE.validate(
+        __import__("pandas").DataFrame(data),
+        {"joint_1_position": (-1.0, 1.0)},
+        source_rows=data,
+    )
+    assert body["robotics_checks"] == direct["checks"]
+    assert {item["trial_index"] for item in body["exclusions"]} == set(direct["excluded"])
+    assert body["legacy_physics"]["comparison_only"] is True
+    assert len(body["episode_quality"]["episodes"]) == 2
+    from core.physical_ai import episode_quality
+    expected_quality = episode_quality(
+        data, robotics_limits={"joint_1_position": (-1.0, 1.0)}
+    )
+    assert body["episode_quality"] == expected_quality
+
+
+def test_robotics_episode_quality_uses_fixed_failure_labels(client):
+    from core.physical_ai import FAILURE_LABELS, episode_quality
+
+    data = [
+        {"episode_id": "clean", "time": 0.0, "joint_1_position": 0.0},
+        {"episode_id": "clean", "time": 0.1, "joint_1_position": 0.1},
+        {"episode_id": "bad", "time": 0.0, "joint_1_position": 0.0},
+        {"episode_id": "bad", "time": 0.1, "joint_1_position": 0.8},
+    ]
+    limits = {"joint_1_position": [-0.5, 0.5]}
+    response = client.post("/v1/validate/physics-only", json={
+        "data": data,
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+    })
+    expected = episode_quality(data, robotics_limits={"joint_1_position": (-0.5, 0.5)})
+
+    assert response.status_code == 200
+    quality = response.json()["episode_quality"]
+    assert quality == expected
+    bad_episode = next(item for item in quality["episodes"] if item["episode_id"] == "bad")
+    assert bad_episode["failure_labels"] == ["limit_violation"]
+    assert set(bad_episode["failure_labels"]).issubset(FAILURE_LABELS)
+
+
+def test_robotics_general_analysis_is_opt_in_and_comparison_only(client, monkeypatch):
+    import api.server as server
+
+    monkeypatch.setattr(server, "APIE_AVAILABLE", False)
+    monkeypatch.setattr(server, "_apie_engine", None)
+    monkeypatch.setattr(server, "dimensional_validate", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        server,
+        "_serialize_dimensional",
+        lambda *args, **kwargs: {"status": "failed", "trials_excluded": 1},
+    )
+    payload = {
+        "data": [{"time": 0, "joint_1_position": 0}, {"time": 0.1, "joint_1_position": 0.1}],
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_1_position": [-1, 1]},
+        "run_ai": False,
+    }
+    default = client.post("/v1/validate", json=payload).json()
+    opted_in = client.post("/v1/validate", json={**payload, "run_general": True}).json()
+
+    assert "general_analysis" not in default
+    assert opted_in["general_analysis"]["comparison_only"] is True
+    assert opted_in["status"] == default["status"]
+    assert opted_in["training_ready"] == default["training_ready"]
+    assert opted_in["exclusions"] == default["exclusions"]
+
+
+def test_robotics_declared_degrees_match_radian_data_and_report_evidence(client):
+    degree_rows = [
+        {"time": 0.0, "joint_1_position": 0.0},
+        {"time": 0.1, "joint_1_position": 120.0},
+    ]
+    radian_rows = [
+        {"time": 0.0, "joint_1_position": 0.0},
+        {"time": 0.1, "joint_1_position": 120.0 * 3.141592653589793 / 180.0},
+    ]
+    limits = {"joint_1_position": [-1.5, 1.5]}
+    degree_response = client.post("/v1/validate/physics-only", json={
+        "data": degree_rows,
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+        "units": {"joint_1_position": "deg"},
+    }).json()
+    radian_response = client.post("/v1/validate/physics-only", json={
+        "data": radian_rows,
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+    }).json()
+
+    assert degree_response["status"] == radian_response["status"] == "failed"
+    assert degree_response["robotics_checks"] == radian_response["robotics_checks"]
+    assert degree_response["exclusions"] == radian_response["exclusions"]
+    evidence = next(item for item in degree_response["robotics_evidence"] if item["sample_index"] == 1)
+    assert evidence["observed"] == pytest.approx(2.09439510239)
+    assert evidence["signal"] == "joint_1_position"
+    assert degree_response["robotics_summary"]["unit_conversions"] == {"joint_1_position": "deg->rad"}
+
+
+def test_robotics_units_for_unknown_signal_are_bad_request(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"joint_1_position": 0.0}],
+        "simulation_type": "robotics",
+        "units": {"joint_2_position": "deg"},
+    })
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "bad_request"
+    assert "not in the data" in response.json()["error"]["message"]
+
+
+def test_physical_ai_stream_sync_endpoint_pass_and_fail(client):
+    failed = client.post("/v1/streams/sync", json={
+        "streams": {"camera": [0.0, 0.1, 0.2], "state": [0.2, 0.3, 0.4]},
+        "tolerance_seconds": 0.05,
+    })
+    aligned = client.post("/v1/streams/sync", json={
+        "streams": {"camera": [0.0, 0.1, 0.2], "state": [0.01, 0.11, 0.21]},
+        "tolerance_seconds": 0.05,
+    })
+
+    assert failed.status_code == aligned.status_code == 200
+    assert failed.json()["verdict"] == "failed"
+    assert aligned.json()["verdict"] == "passed"
+    assert failed.json()["streams"]["state"]["median_offset_seconds"] == pytest.approx(0.2)
+
+
+def test_sim_real_compare_endpoint_reports_velocity_drift_and_one_sided_signals(client):
+    sim = [
+        {"episode_id": "s", "t": i * 0.1, "joint_1_position": i * 0.3, "sim_only": i}
+        for i in range(10)
+    ]
+    real = [
+        {"episode_id": "r", "t": i * 0.1, "joint_1_position": i * 0.1}
+        for i in range(10)
+    ]
+    response = client.post("/v1/compare/sim-real", json={
+        "sim_data": sim,
+        "real_data": real,
+        "robotics_limits": {"joint_1_position": [-10, 10]},
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == "drift_detected"
+    assert body["signals"]["joint_1_velocity_fd"]["overlap"] < 0.5
+    assert body["signals_only_in_sim"] == ["sim_only"]
