@@ -26,47 +26,35 @@ export function ClaudeSetup() {
       <section className="rounded-xl border border-[var(--line)] bg-[var(--paper-raised)] p-6 sm:p-8" aria-labelledby="steps-heading">
         <h2 id="steps-heading" className="text-xl font-medium text-[var(--ink)]">Setup</h2>
         <ol className="mt-5 space-y-5">
-          <li className="flex gap-3">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--ink)] text-sm text-white">1</span>
-            <div>
-              <p className="font-medium text-[var(--ink)]">Add SimAPI</p>
-              <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
-                In Claude, open <strong>Customize → Connectors → + Add → Add custom connector</strong>. Name it <strong>SimAPI</strong>.
-              </p>
-            </div>
+          <li>
+            <p className="font-medium text-[var(--ink)]">1. Add SimAPI</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
+              In Claude, open <strong>Customize → Connectors → + Add → Add custom connector</strong>. Name it <strong>SimAPI</strong>.
+            </p>
           </li>
-          <li className="flex gap-3">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--ink)] text-sm text-white">2</span>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium text-[var(--ink)]">Enter the server URL</p>
-              <code className="mt-2 block break-all rounded-lg bg-[#eeeae0] p-3 font-mono text-xs text-[var(--ink)]">{MCP_URL}</code>
-              <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">Click <strong>Continue</strong>.</p>
-            </div>
+          <li className="min-w-0">
+            <p className="font-medium text-[var(--ink)]">2. Enter the server URL</p>
+            <code className="mt-2 block break-all rounded-lg bg-[#eeeae0] p-3 font-mono text-xs text-[var(--ink)]">{MCP_URL}</code>
+            <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">Click <strong>Continue</strong>.</p>
           </li>
-          <li className="flex gap-3">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--ink)] text-sm text-white">3</span>
-            <div className="min-w-0 flex-1">
-              <p className="font-medium text-[var(--ink)]">Add your MCP key</p>
-              <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
-                Choose <strong>No sign-in</strong>. Under <strong>Request headers</strong>, add this required header:
-              </p>
-              <div className="mt-2 grid gap-2 rounded-lg bg-[#eeeae0] p-3 text-xs sm:grid-cols-[130px_1fr]">
-                <span className="font-medium text-[var(--ink-muted)]">Header name</span>
-                <code className="break-all font-mono text-[var(--ink)]">authorization</code>
-                <span className="font-medium text-[var(--ink-muted)]">Header value</span>
-                <code className="break-all font-mono text-[var(--ink)]">Bearer &lt;your MCP key&gt;</code>
-              </div>
-              <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">Mark it <strong>Required</strong>, then click <strong>Add</strong>.</p>
+          <li className="min-w-0">
+            <p className="font-medium text-[var(--ink)]">3. Add your MCP key</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
+              Choose <strong>No sign-in</strong>. Under <strong>Request headers</strong>, add this required header:
+            </p>
+            <div className="mt-2 grid gap-2 rounded-lg bg-[#eeeae0] p-3 text-xs sm:grid-cols-[130px_1fr]">
+              <span className="font-medium text-[var(--ink-muted)]">Header name</span>
+              <code className="break-all font-mono text-[var(--ink)]">authorization</code>
+              <span className="font-medium text-[var(--ink-muted)]">Header value</span>
+              <code className="break-all font-mono text-[var(--ink)]">Bearer &lt;your MCP key&gt;</code>
             </div>
+            <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">Mark it <strong>Required</strong>, then click <strong>Add</strong>.</p>
           </li>
-          <li className="flex gap-3">
-            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--ink)] text-sm text-white">4</span>
-            <div>
-              <p className="font-medium text-[var(--ink)]">Use SimAPI in a chat</p>
-              <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
-                Select <strong>+ → Connectors</strong>, turn on SimAPI, and ask Claude to analyze your robotics data.
-              </p>
-            </div>
+          <li>
+            <p className="font-medium text-[var(--ink)]">4. Use SimAPI in a chat</p>
+            <p className="mt-1 text-sm leading-6 text-[var(--ink-secondary)]">
+              Select <strong>+ → Connectors</strong>, turn on SimAPI, and ask Claude to analyze your robotics data.
+            </p>
           </li>
         </ol>
 
