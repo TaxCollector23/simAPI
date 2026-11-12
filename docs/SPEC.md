@@ -329,3 +329,16 @@ YC does not fund feature lists. It funds a team with growing evidence that a spe
 2. Run Prompt H1.
 3. Run one real `.mcap` or `.db3` recording end to end and record what breaks.
 4. Only then choose the next H prompt, and name the design partner whose needs justify it.
+
+## Execution update (2026-11-12)
+
+This update records work completed after the source specification was written.
+
+| Required step | Current status |
+| --- | --- |
+| Deploy `physical_ai.py` and `physical_ai_v2.py` into `core/` | Complete; both modules are in `core/` on `main`. |
+| Run H1 | Complete; the tightened screening defaults and unprofiled-signal warning are merged. |
+| Run one real `.mcap`/`.db3` end to end and record breakages | Complete for one licensed public ROS 2 MCAP. See [the run report](real-recording-run.md). The loader fix is merged; validation still fails on the `t` epoch-timestamp semantic bound, and the default 100 MiB upload limit rejects the raw file. |
+| Choose the next H prompt and name a design partner | Pending a named design partner. The public sample proves the code path but is not a customer or design-partner validation. |
+
+The Python API is not externally deployed. The public health route still reports `python_backend: false`; the repository has no configured Python-service deployment target or GitHub deployment secrets/variables. The API deployment can proceed after a Railway/Render service is connected and configured.
