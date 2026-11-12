@@ -1,0 +1,180 @@
+---
+title: "Robotics validation"
+description: "Validate robot telemetry, compare sim-to-real runs, and check reported end-effector positions against a URDF."
+icon: "robot"
+---
+
+Use `simulation_type: "robotics"` with [`POST /v1/validate`](/api-reference/validate) or
+[`POST /v1/validate/physics-only`](/api-reference/validate) to run SimAPI's
+deterministic robotics checks. The robotics checks control the response's
+`status`, exclusions, and `training_ready` value. The older physics checks are
+returned under `legacy_physics` for comparison. Set `run_general: true` to add
+dimensional analysis under `general_analysis`; those findings do not change the
+robotics verdict.
+
+Generic robotics requests require at least one sample. A request with no rows
+returns `400`. Requests using `robotics_profile: "ftc"` or `"frc"` instead run
+the FTC/FRC profile, which fails closed for empty or unrecognized telemetry.
+
+## Request fields
+
+These fields are part of the regular validation request body:
+
+| Field | Purpose |
+| ----- | ------- |
+| `robotics_limits` | Optional per-signal `[minimum, maximum]` limits. Use limits from the robot or controller. Revolute positions use radians, angular velocity uses radians per second, and effort/torque uses newton metres. |
+| `units` | Declare units for signals in `data`. Revolute positions accept `rad` or `deg`; angular velocity accepts `rad/s` or `deg/s`; torque/effort accepts `Nm`; force accepts `N`. When a URDF identifies a prismatic joint, its position/velocity uses `m`/`m/s`. |
+| `robotics_limit_units` | Optional units for the supplied limit bounds. If omitted, limits use canonical units: radians and radians per second for revolute joints, metres and metres per second for prismatic URDF joints, and newton metres for effort/torque. |
+| `run_general` | Defaults to `false`. When true, include dimensional and APIE analysis as comparison-only output. |
+| `robotics_profile` | Select `ftc` or `frc` telemetry checks. It is valid only with `simulation_type: "robotics"`. |
+| `ftc_limits` | Override FTC/FRC screening thresholds. `motor_power` and `battery_voltage` take `[minimum, maximum]` pairs; other named thresholds take finite numbers. |
+| `urdf_xml` | Optional URDF XML, limited to 2 MiB. When supplied, SimAPI compares reported end-effector x/y/z with forward kinematics for the unique base-to-tip chain in the URDF. |
+| `kinematics_tolerance_m` | Maximum accepted distance between reported and computed end-effector positions. Defaults to `0.01` metres. |
+
+Invalid units, malformed URDF, or a unit declaration for a signal absent from
+the data returns `400`. When URDF kinematics is requested, rows without enough
+joint or end-effector values are reported as a coverage warning and excluded
+from training-ready data. A failed kinematics check also marks the matching
+episode as not training ready. URDF FK requests are limited to
+`SIMAPI_MAX_KINEMATICS_SAMPLES` samples (default `10,000`); larger requests
+return `413`. The URDF parser accepts at most 10,000 links and 10,000 joints
+separately, and rejects a child link with multiple parents.
+
+## Manipulation arm example
+
+```bash
+curl -X POST "$SIMAPI_URL/v1/validate/physics-only" \
+  -H "X-API-Key: $SIMAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "simulation_type": "robotics",
+    "run_ai": false,
+    "data": [
+      {"episode_id":"pick-1", "time":0.0, "joint_1_position":0, "end_effector_x":0.42, "end_effector_y":0.10, "end_effector_z":0.31},
+      {"episode_id":"pick-1", "time":0.1, "joint_1_position":12, "end_effector_x":0.40, "end_effector_y":0.15, "end_effector_z":0.31}
+    ],
+    "units": {"joint_1_position":"deg"},
+    "robotics_limits": {"joint_1_position":[-2.2, 2.2]},
+    "robotics_limit_units": {"joint_1_position":"rad"}
+  }'
+```
+
+The report includes `robotics_checks`, `robotics_summary`, per-sample
+`robotics_evidence`, and `episode_quality`. If `urdf_xml` is included, the
+kinematics check adds computed-versus-reported positions and distance in
+metres. A warning from screening defaults or incomplete kinematics coverage
+keeps `training_ready` false.
+
+This minimal URDF describes a one-joint revolute arm whose tool point is one
+metre from the base at zero angle. Joint values are radians unless `units`
+declares degrees.
+
+```json
+{
+  "simulation_type": "robotics",
+  "run_ai": false,
+  "data": [{
+    "joint_1_position": 0.0,
+    "end_effector_x": 1.0,
+    "end_effector_y": 0.0,
+    "end_effector_z": 0.0
+  }],
+  "robotics_limits": {"joint_1_position": [-3.14, 3.14]},
+  "urdf_xml": "<robot name=\"one_joint\"><link name=\"base\"/><link name=\"tool\"/><joint name=\"joint_1\" type=\"revolute\"><parent link=\"base\"/><child link=\"tool\"/><origin xyz=\"1 0 0\"/><axis xyz=\"0 0 1\"/></joint></robot>",
+  "kinematics_tolerance_m": 0.01
+}
+```
+
+## FTC and FRC logs
+
+Set `robotics_profile` to `"ftc"` or `"frc"` for drivetrain telemetry such as
+motor power, encoder position/velocity, battery voltage, heading, and
+odometry. The profile checks power range, encoder consistency, motion without
+power, battery sag under load, heading wrap/jumps, and odometry jumps.
+
+```bash
+curl -X POST "$SIMAPI_URL/v1/validate/physics-only" \
+  -H "X-API-Key: $SIMAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "simulation_type": "robotics",
+    "robotics_profile": "frc",
+    "run_ai": false,
+    "ftc_limits": {"heading_jump_deg": 75, "battery_sag_voltage": 12.2},
+    "data": [
+      {"time":0.00, "left_motor_power":0.4, "left_encoder_position":0, "heading_deg":179, "battery_voltage":12.4},
+      {"time":0.02, "left_motor_power":0.4, "left_encoder_position":4, "heading_deg":-179, "battery_voltage":12.1}
+    ]
+  }'
+```
+
+The response has a `ftc_frc_report` with `verdict`, `failed_checks`,
+`warnings`, `excluded_rows`, and episode summaries. Warnings make
+`training_ready` false; a wrap such as `179°` to `-179°` is handled as a small
+heading change. Recognized numeric telemetry fields must contain finite
+numbers when present. Null, non-numeric, or non-finite values create an
+`invalid_numeric_signal` failure and exclude the affected row.
+
+## Synchronize sensor streams
+
+`POST /v1/streams/sync` compares timestamp arrays by sample index. Send at
+least two named, non-empty streams. The first stream is the reference. Offsets
+and their spread must stay within `tolerance_seconds`, and stream lengths must
+match for an in-sync verdict. Requests are capped at 32 streams and the API row
+limit (`SIMAPI_MAX_ROWS`, default `1,000,000` timestamp samples summed across
+all streams).
+
+```bash
+curl -X POST "$SIMAPI_URL/v1/streams/sync" \
+  -H "X-API-Key: $SIMAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "streams": {
+      "camera": [0.00, 0.10, 0.20],
+      "robot_state": [0.01, 0.11, 0.21],
+      "action": [0.02, 0.12, 0.22]
+    },
+    "tolerance_seconds": 0.05
+  }'
+```
+
+The result reports `verdict`, `in_sync`, the reference stream, and per-stream
+median offset, jitter, sample counts, and length-mismatch status.
+
+## Compare simulation with robot runs
+
+`POST /v1/compare/sim-real` validates and compares two non-empty datasets. It
+reports shared numeric signal distributions, derived joint velocity from
+position/time samples, one-sided signals, and per-side robotics check status.
+Declare `sim_units` and `real_units` separately when their data use different
+units; both sides are converted before comparison. Limits are shared across
+the two sides.
+
+```bash
+curl -X POST "$SIMAPI_URL/v1/compare/sim-real" \
+  -H "X-API-Key: $SIMAPI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sim_data": [{"t":0.0, "joint_1_position":0}, {"t":0.1, "joint_1_position":0.1}],
+    "real_data": [{"t":0.0, "joint_1_position":0}, {"t":0.1, "joint_1_position":5.73}],
+    "sim_units": {"joint_1_position":"rad"},
+    "real_units": {"joint_1_position":"deg"},
+    "robotics_limits": {"joint_1_position":[-1.0, 1.0]}
+  }'
+```
+
+The `verdict` is `aligned`, `drift_detected`, or `insufficient_data`. When the
+datasets have no common numeric signal, the result is `insufficient_data` with
+a `comparison_note`. `aligned` requires at least one shared numeric signal to
+be compared and no detected distribution or check-status drift.
+
+## Related endpoints
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `POST` | `/v1/validate` | Robotics checks plus the optional asynchronous AI layer |
+| `POST` | `/v1/validate/physics-only` | Deterministic checks without starting AI |
+| `POST` | `/v1/streams/sync` | Compare camera, state, and action timestamp streams |
+| `POST` | `/v1/compare/sim-real` | Compare simulated and real-robot runs |
+
+For recording uploads, see [Validate an uploaded file](/api-reference/upload).

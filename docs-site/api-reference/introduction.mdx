@@ -37,7 +37,10 @@ version; the response schema within a version is additive-only.
 | Method | Path | Description |
 | ------ | ---- | ----------- |
 | `POST` | [`/v1/validate`](/api-reference/validate) | Validate a JSON batch of trials |
+| `POST` | [`/v1/validate/physics-only`](/api-reference/validate) | Run deterministic checks without starting AI |
 | `POST` | [`/v1/validate/upload`](/api-reference/upload) | Validate an uploaded file |
+| `POST` | [`/v1/streams/sync`](/api-reference/robotics) | Compare robotics timestamp streams |
+| `POST` | [`/v1/compare/sim-real`](/api-reference/robotics) | Compare simulated and real-robot runs |
 | `POST` | `/v1/validate/physics-only` | Physics checks only (skip AI) |
 | `GET`  | [`/v1/job/{id}`](/api-reference/jobs) | Fetch a job's physics result |
 | `GET`  | [`/v1/job/{id}/ai`](/api-reference/jobs) | Poll for the async AI result |

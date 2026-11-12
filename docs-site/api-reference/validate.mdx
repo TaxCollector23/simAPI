@@ -32,6 +32,13 @@ layer (unless disabled). Returns a full validation report.
   Run the async AI reasoning layer. Set `false` to skip it.
 </ParamField>
 
+<Note>
+  For robot arm, FTC/FRC, stream-sync, and simulation-versus-real fields and
+  examples, see [Robotics validation](/api-reference/robotics). For
+  `simulation_type: "robotics"`, deterministic robotics checks control the
+  verdict and training-readiness fields.
+</Note>
+
 ## Response
 
 <ResponseField name="status" type="string">`passed` · `warning` · `failed`.</ResponseField>
