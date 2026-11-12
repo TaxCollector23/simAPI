@@ -92,8 +92,8 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .landing-button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; border-radius: 7px; font-size: 15px; font-weight: 500; transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease; }
 .hero-actions { gap: 8px; }
-.hero-actions .landing-button { padding-inline: 16px; }
-.landing-button-claude { gap: 6px; padding-inline: 12px; font-size: 14px; }
+.hero-actions .landing-button { padding-inline: 14px; }
+.hero-actions .landing-button-claude { gap: 6px; padding-inline: 12px; font-size: 14px; }
 .landing-button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 .landing-button-primary { background: var(--ink); color: var(--paper); }
 .landing-button-primary:hover { background: #3a3a32; }
