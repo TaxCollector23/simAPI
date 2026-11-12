@@ -2,7 +2,7 @@
 
 ## The data quality platform for Physical AI
 
-### In plain English
+**In plain English**
 
 Labs spend millions collecting robot demonstrations. A person drives a robot arm, or the arm runs in simulation, and every moment is recorded: joint angles, speeds, motor forces, camera timestamps, and commanded actions. AI models are then trained on those recordings.
 
@@ -144,7 +144,7 @@ Duplicated demonstrations can overweight one motion during training. Exact hashi
 
 **YC/business value:** Medium. This would round out dataset hygiene and be easy to demonstrate on public data.
 
-#### E9. Timestamp monotonicity and gap report — DONE, with LATER polish
+#### E9. Timestamp monotonicity and gap report — DONE; standalone report is LATER polish
 
 Time must not go backwards or repeat within an episode. Silent sampling gaps should be reported per episode with their counts and worst gap, not only as pass/fail. The core trajectory engine already has `robotics_time_order` and `robotics_sample_gaps` (when `max_time_step` is set); `core/physical_ai.py` labels `time_gap` and `time_disorder`.
 
@@ -162,7 +162,7 @@ Reports are often discussed in conversations. A shareable artifact makes it easi
 
 ### 2B. HARD ideas
 
-#### H1. Fix the 100k defaults in core — PROMPT-GIVEN; do this first
+#### H1. Fix the 100k defaults in core — PROMPT-GIVEN (Prompt H1: do this first)
 
 Tighten the core screening defaults to torque ±200, velocity ±10, acceleration ±50, and force ±1000. Add the `robotics_unprofiled_signal` warning to cap results when a joint signal uses defaults. Apply the torque and velocity tightening in `core/physics_validator.py` as well. Explicit-limit callers must remain unchanged.
 
