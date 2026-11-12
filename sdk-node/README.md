@@ -98,3 +98,38 @@ Profiles, `compareReports`, `repairPreview`, `parseCsv`, and `toCsv` are also ex
 The hosted API defaults to `https://simapilander.vercel.app/api`. Use `SIMAPI_BASE_URL` for another service. No local server or account is required by the public endpoint. Optional AI review can transmit statistics and selected sample rows to a model provider; `--no-ai` disables it.
 
 A passing report describes the checks that ran. It does not certify hardware, policies, or safe execution.
+
+## FTC / FRC telemetry
+
+Use the built-in school robotics profile for common motor, encoder, battery,
+heading, and odometry checks:
+
+```sh
+simapi validate drive-log.csv --profile ftc
+# frc is an alias for ftc
+simapi validate drive-log.csv --profile frc
+```
+
+The defaults check motor power in `[-1, 1]`, battery voltage in a warning
+band, encoder velocity agreement, battery sag under load, wrapped gyro
+heading, and odometry speed. The profile accepts common headers such as
+`leftMotorPower`, `leftEncoderTicks`, `batteryVoltage`, `heading`, and
+`odometry_x`/`odometry_y`. A custom JSON profile can override any default:
+
+```json
+{
+  "schema_version": 1,
+  "name": "My FTC robot",
+  "robotics_profile": "ftc",
+  "ftc_limits": {
+    "motor_power": [-0.9, 0.9],
+    "heading_jump_deg": 75
+  },
+  "robotics_limits": {},
+  "conditions": {}
+}
+```
+
+The CLI sends FTC requests with `robotics_profile: "ftc"` and `ftc_limits`
+alongside the standard robotics rows and conditions. FTC limits remain separate
+from arm joint limits; selecting `ftc` does not change the arm profile.

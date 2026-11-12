@@ -38,6 +38,8 @@ DEFAULT_ROBOTICS_LIMITS: dict[str, tuple[float, float]] = {
     "workspace_volume": (0.0, 1e6),
 }
 
+_JOINT_SIGNAL_SUFFIXES = ("_position", "_velocity", "_acceleration", "_torque")
+
 
 @dataclass(frozen=True)
 class RoboticsValidationContext:
@@ -294,6 +296,32 @@ class RoboticsValidationEngine:
                         limits[canonical] = DEFAULT_ROBOTICS_LIMITS["joint_" + quantity]
         limits.update(configured)
 
+        joint_signals = sorted(
+            {
+                normalize(str(column))
+                for column in data.columns
+                if normalize(str(column)).startswith("joint")
+                and normalize(str(column)).endswith(_JOINT_SIGNAL_SUFFIXES)
+            }
+        )
+        configured_joint_signals = set(joint_signals).intersection(configured)
+        fallback_signals = sorted(set(joint_signals).difference(configured_joint_signals))
+        if joint_signals and len(configured_joint_signals) == len(joint_signals):
+            limits_source = "profile"
+        elif configured_joint_signals:
+            limits_source = "mixed"
+        else:
+            limits_source = "defaults"
+        screening_warnings = (
+            [
+                "screening defaults used for "
+                + ", ".join(fallback_signals)
+                + " — supply a profile (or import a URDF) for real limits"
+            ]
+            if fallback_signals
+            else []
+        )
+
         rows = source_rows if source_rows is not None else data.to_dict("records")
         options = dict(conditions or {})
         context = RoboticsValidationContext(
@@ -312,6 +340,8 @@ class RoboticsValidationEngine:
             "time_column": None,
             "episode_column": None,
             "assumptions": [],
+            "limits_source": limits_source,
+            "limit_fallback_signals": fallback_signals,
         }
         suites = [*self.suites, *(additional_suites or [])]
         for suite in suites:
@@ -343,4 +373,10 @@ class RoboticsValidationEngine:
             total = evidence["total"] + len(extra_evidence)
             entries = (evidence["entries"] + extra_evidence)[:1000]
             evidence = {"entries": entries, "total": total, "truncated": total > len(entries)}
-        return {"checks": checks, "excluded": excluded, "summary": summary, "evidence": evidence}
+        return {
+            "checks": checks,
+            "excluded": excluded,
+            "summary": summary,
+            "evidence": evidence,
+            "screening_warnings": screening_warnings,
+        }

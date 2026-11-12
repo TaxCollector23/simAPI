@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, mkdtemp, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -14,6 +15,7 @@ import {
   readRecording,
   jointStateRow,
 } from "../lib/robotics-import.js";
+import { validateFtcLog, resolveFtcProfile } from "../lib/ftc-frc.js";
 import {
   parseCsv,
   parseCsvDocument,
@@ -408,5 +410,49 @@ test("CSV source locations account for multiline quoted records and inspection k
 test('browser and CLI helpers are the same implementation', async () => {
   for (const name of ['robotics-import.js','robotics-import.d.ts','robotics-workflow.js','robotics-workflow.d.ts']) {
     assert.equal(await readFile(new URL(`../lib/${name}`,import.meta.url),'utf8'),await readFile(new URL(`../../web/lib/${name}`,import.meta.url),'utf8'));
+  }
+});
+
+
+test("FTC/FRC profile flags power 1.4 and accepts a wrapped heading", () => {
+  const rows = parseCsvDocument(readFileSync(new URL("../../tests/fixtures/ftc-drive-log.csv", import.meta.url), "utf8")).rows;
+  const report = validateFtcLog(rows);
+  assert.equal(report.verdict, "failed");
+  assert.deepEqual(report.failed_checks.map((check) => check.name), ["power_range"]);
+  assert.equal(report.excluded_rows["1"][0], "left_motor_power=1.4 outside [-1, 1]");
+  assert.ok(!report.failed_checks.some((check) => check.name === "heading_jump"));
+  assert.equal(resolveFtcProfile("frc").robotics_profile, "ftc");
+  assert.deepEqual(resolveFtcProfile("ftc").ftc_limits.motor_power, [-1, 1]);
+});
+
+test("simapi validate --profile ftc sends the FTC request discriminator", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "simapi-ftc-cli-"));
+  const csvPath = new URL("../../tests/fixtures/ftc-drive-log.csv", import.meta.url).pathname;
+  let posted;
+  const server = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    posted = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ status: "failed", trials_submitted: 2, trials_excluded: 1, failed: 1, warnings: 0, issues: [], exclusions: [] }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address();
+  try {
+    const cli = new URL("../bin/simapi.js", import.meta.url).pathname;
+    const child = spawn(process.execPath, [cli, "validate", csvPath, "--profile", "ftc", "--no-ai", "--json"], {
+      env: { ...process.env, SIMAPI_BASE_URL: `http://127.0.0.1:${port}/api`, SIMAPI_CONFIG_DIR: join(dir, "config"), NO_COLOR: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    const exitCode = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(exitCode, 0, stderr || stdout);
+    assert.equal(posted.robotics_profile, "ftc");
+    assert.deepEqual(posted.ftc_limits.motor_power, [-1, 1]);
+    assert.equal(posted.simulation_type, "robotics");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
   }
 });

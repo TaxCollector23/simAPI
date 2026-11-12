@@ -13,8 +13,8 @@ export function Cta() {
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
-          <Link href="/play" className="landing-button landing-button-primary">Check a run <ArrowUpRight size={17} strokeWidth={1.7} /></Link>
-          <Link href="/docs" className="landing-button landing-button-secondary">See how it works</Link>
+          <Link href="/play" className="landing-button landing-button-primary">Validate a run <ArrowUpRight size={17} strokeWidth={1.7} /></Link>
+          <Link href="/docs" className="landing-button landing-button-secondary">Read the workflow docs</Link>
         </div>
       </div>
     </section>

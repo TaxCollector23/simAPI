@@ -15,6 +15,9 @@ export interface ValidationRequest {
   run_ai: boolean;
   job_id?: string;
   robotics_limits?: Record<string, [number, number]>;
+  robotics_profile?: "ftc";
+  ftc_limits?: Record<string, number | [number, number]>;
+  units?: Record<string, string>;
 }
 
 export interface Issue {
@@ -77,7 +80,7 @@ export interface ValidationResult {
   robotics_evidence?: Evidence[];
   robotics_evidence_total?: number;
   robotics_evidence_truncated?: boolean;
-  validation_context?: { simulation_type: string; robotics_limits: Record<string, [number, number]>; conditions: Record<string, number> };
+  validation_context?: { simulation_type: string; robotics_limits: Record<string, [number, number]>; conditions: Record<string, number>; robotics_profile?: "ftc"; ftc_limits?: Record<string, number | [number, number]>; units?: Record<string, string> };
   robotics_summary?: RoboticsSummary;
   robotics_checks?: { name: string; status: "info" | "passed" | "warning" | "failed"; detail: string; violations: number }[];
   job_id: string;
