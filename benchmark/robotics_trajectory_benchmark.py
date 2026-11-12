@@ -2,7 +2,7 @@
 
 Run from any directory with ``python benchmark/robotics_trajectory_benchmark.py``.
 The old implementation is loaded from the repository revision that preceded
-vectorization; set ``SIMAPI_TRAJECTORY_BASELINE`` to compare another revision.
+vectorization; set ``TRAJECTORY_BASELINE_REVISION`` to compare another revision.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 from core.robotics_trajectory import analyze_trajectories as analyze_vectorized  # noqa: E402
 
 BASELINE_REVISION = os.environ.get(
-    "SIMAPI_TRAJECTORY_BASELINE", "7a9d5c3"
+    "TRAJECTORY_BASELINE_REVISION", "7a9d5c3"
 )
 DEFAULT_ROWS = 200_000
 DEFAULT_JOINTS = 6

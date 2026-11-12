@@ -4,8 +4,8 @@ title = "SimAPI Gitleaks configuration"
 useDefault = true
 
 [[allowlists]]
-description = "The benchmark baseline is a Git commit ID, not a credential."
+description = "The legacy benchmark env-var name is non-secret and only occurs in its source file."
 condition = "AND"
 regexTarget = "secret"
-regexes = ['''7a9d5c39c64b32926006f46c69f3ea9f38998aeb''']
+regexes = ['''SIMAPI_TRAJECTORY_BASELINE''']
 paths = ['''^benchmark/robotics_trajectory_benchmark\.py$''']
