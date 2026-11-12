@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 # --- find the SimAPI repo so we can import its real engine, not a copy ---
-REPO = os.environ.get("SIMAPI_PATH") or os.path.expanduser("~/workspace/simapi")
+REPO = os.environ.get("SIMAPI_PATH") or str(Path(__file__).resolve().parent)
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 

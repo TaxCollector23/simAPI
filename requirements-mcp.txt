@@ -1,0 +1,4 @@
+-r requirements.txt
+mcp<2
+pyarrow
+rosbags

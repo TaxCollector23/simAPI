@@ -105,3 +105,23 @@ HTTP accepts recording uploads rather than local filesystem paths. The CSV
 path and recording path tools reject calls in HTTP mode, so a remote request
 cannot make the process open a caller-specified local file. A client can send
 episode rows directly or use the recording upload tool for a supported file.
+
+
+## Connect Claude
+
+The Render MCP service is a remote Streamable HTTP connector at
+`https://<RENDER_EXTERNAL_HOSTNAME>/mcp`. The Render blueprint creates a
+separate `simapi-mcp` web service and generates its `SIMAPI_MCP_API_KEYS`
+bearer key. Copy that key from the Render service's environment settings; keep
+it private.
+
+In Claude, open **Settings → Connectors → Add custom connector** and enter
+**SimAPI** as the name and the MCP URL above. Add a fixed request header:
+`Authorization: Bearer <SIMAPI_MCP_API_KEYS>`. Then enable the connector in a
+conversation and ask Claude to analyze robotics episode rows or an eligible
+small recording. Claude invokes the MCP tools from natural language; custom
+connectors do not add a `/simapi` slash command.
+
+Claude's remote connector setup supports Streamable HTTP and fixed bearer-token
+headers; see [Anthropic's custom connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp).
+The MCP upload tool's current limit is 3 MiB per recording.
