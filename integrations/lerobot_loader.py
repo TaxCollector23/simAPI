@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from integrations.recording_limits import RecordingSampleLimitExceeded
-from integrations.robotics_validation import validate_robotics_frame
+from integrations.robotics_validation import load_limits_profile, validate_robotics_frame
 
 
 def _flatten_vector(value: Any, *, column: str, row: int) -> list[float]:
@@ -187,6 +187,11 @@ def load_lerobot(
                 vector[action] if action < len(vector) else np.nan for vector in action_vectors
             ]
 
+    # Preserve measured torque/effort for API-format limits profiles.
+    for column in raw:
+        if str(column).startswith("joint_") and str(column).endswith(("_torque", "_effort")):
+            out[column] = pd.to_numeric(raw[column], errors="coerce").to_numpy()
+
     out["t"] = pd.to_numeric(out["t"], errors="coerce")
     out = out[np.isfinite(out["t"])].sort_values(["episode_id", "t"], kind="stable").reset_index(drop=True)
     if out.empty:
@@ -246,12 +251,17 @@ def _cli(argv: list[str]) -> int:
     parser.add_argument("--max-episodes", type=int, default=None)
     parser.add_argument("--out", default="", help="Write the converted rows to CSV")
     parser.add_argument("--report", default="", help="Write the validation report to JSON")
+    parser.add_argument("--profile", help="Limits JSON file in API robotics_limits format")
     args = parser.parse_args(argv)
+    try:
+        limits = load_limits_profile(args.profile)
+    except (OSError, ValueError) as exc:
+        parser.error(f"Invalid --profile: {exc}")
     frame = load_lerobot(args.dataset, max_episodes=args.max_episodes)
     if args.out:
         frame.to_csv(args.out, index=False)
     report = validate_robotics_frame(
-        frame, time_unit=str(frame.attrs.get("time_unit", "seconds"))
+        frame, limits=limits, time_unit=str(frame.attrs.get("time_unit", "seconds"))
     )
     report.update({"source": args.dataset, "format": "lerobot"})
     rendered = json.dumps(report, indent=2, default=str)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -63,3 +66,22 @@ def validate_robotics_frame(
         "summary": summary,
         "episodes": episodes,
     }
+
+
+def load_limits_profile(path):
+    """Read API-format robotics_limits (or a plain signal-to-range map)."""
+    if path is None:
+        return None
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("profile must be a JSON object")
+    limits = value.get("robotics_limits", value)
+    if not isinstance(limits, dict) or not limits:
+        raise ValueError("profile must contain non-empty robotics_limits")
+    for signal, bounds in limits.items():
+        if (not isinstance(signal, str) or not signal.strip() or
+                not isinstance(bounds, list) or len(bounds) != 2 or
+                any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in bounds) or
+                bounds[0] >= bounds[1]):
+            raise ValueError(f"profile has invalid limits for {signal!r}")
+    return limits
