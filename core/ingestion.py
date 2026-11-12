@@ -639,10 +639,60 @@ def _coerce_numeric(series: pd.Series) -> pd.Series:
     return converted if converted.notna().any() else series
 
 
+def _coerce_robotics_numeric(series: pd.Series) -> pd.Series:
+    """Coerce robot signals while treating booleans as invalid measurements."""
+    if pd.api.types.is_bool_dtype(series.dtype):
+        return pd.Series(np.nan, index=series.index, dtype=float)
+
+    candidates = series
+    if pd.api.types.is_object_dtype(series.dtype):
+        boolean_mask = series.map(lambda value: isinstance(value, (bool, np.bool_)))
+        if boolean_mask.any():
+            candidates = series.mask(boolean_mask, np.nan)
+
+    try:
+        return pd.to_numeric(candidates, errors="coerce")
+    except (TypeError, ValueError):
+        # JSON permits nested objects/arrays in a field. They are not scalar
+        # numeric measurements, but should produce a validation error rather
+        # than turning an otherwise valid request into a server error.
+        return pd.Series(np.nan, index=series.index, dtype=float)
+
+
+_ROBOTICS_NUMERIC_SUFFIXES = (
+    "_position", "_velocity", "_acceleration", "_torque", "_effort",
+    "_force", "_power", "_current", "_voltage", "_encoder", "_ticks",
+    "_heading", "_angle",
+)
+_ROBOTICS_NUMERIC_COLUMNS = {
+    "t", "time", "timestamp", "stamp",
+    "end_effector_x", "end_effector_y", "end_effector_z",
+    "end_effector_position_x", "end_effector_position_y", "end_effector_position_z",
+    "joint_position", "joint_velocity", "joint_acceleration", "joint_torque",
+    "end_effector_force", "position_error", "manipulability", "condition_number",
+    "power_consumption", "settling_time", "rise_time", "overshoot",
+}
+
+
+def _is_robotics_numeric_column(column: str) -> bool:
+    normalized = _normalize_col(str(column))
+    canonical = COLUMN_ALIASES.get(normalized, normalized)
+    return canonical in _ROBOTICS_NUMERIC_COLUMNS or canonical.endswith(_ROBOTICS_NUMERIC_SUFFIXES)
+
+
 class DataIngester:
-    def ingest(self, data, format_hint=None, filename=None):
+    def ingest(
+        self,
+        data,
+        format_hint=None,
+        filename=None,
+        *,
+        robotics_mode=False,
+        expected_numeric_columns=None,
+    ):
         metadata = {"original_format": format_hint, "filename": filename,
-                    "columns_renamed": {}, "columns_dropped": [], "rows_ingested": 0}
+                    "columns_renamed": {}, "columns_dropped": [], "rows_ingested": 0,
+                    "invalid_numeric_columns": []}
 
         fmt = self._detect(data, format_hint, filename)
         metadata["detected_format"] = fmt
@@ -660,6 +710,23 @@ class DataIngester:
 
         df, renamed = self._normalize(df)
         metadata["columns_renamed"] = renamed
+
+        if robotics_mode:
+            expected = set()
+            for column in expected_numeric_columns or ():
+                normalized = _normalize_col(str(column))
+                expected.add(COLUMN_ALIASES.get(normalized, normalized))
+            invalid_numeric = []
+            for column in df.columns:
+                normalized = _normalize_col(str(column))
+                canonical = COLUMN_ALIASES.get(normalized, normalized)
+                if canonical in expected or _is_robotics_numeric_column(str(column)):
+                    converted = _coerce_robotics_numeric(df[column])
+                    if converted.notna().any():
+                        df[column] = converted
+                    else:
+                        invalid_numeric.append(str(column))
+            metadata["invalid_numeric_columns"] = invalid_numeric
 
         numeric = df.select_dtypes(include=[np.number]).columns.tolist()
         dropped = [c for c in df.columns if c not in numeric]
