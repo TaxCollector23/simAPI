@@ -20,10 +20,14 @@ import json
 import math
 import os
 import re
+import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 import numpy as np
@@ -32,7 +36,7 @@ from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -54,13 +58,16 @@ from core.dimensional.dimensions import ALL_DIMENSION_KEYS, dimension_display_na
 from core.dimensional.engine import KNOWN_IMPOSSIBLE, openrouter_llm_resolver
 from core.dimensional.rules import SEMANTIC_BOUNDS
 from core.ingestion import DataIngester
+from core.kinematics import joint_signal_name
 from core.mesh_validator import MeshValidator, humanize_mesh_check_name, predict_corruption_risks
 from core.physics_validator import PhysicsValidator, SimulationType
 from core.repair import analyze as repair_analyze
 from core.report_export import to_junit_xml, to_sarif
-from core.robotics_engine import RoboticsValidationEngine
+from core.robotics_engine import KinematicsSuite, RoboticsValidationEngine
+from core.robotics_trajectory import normalize as normalize_robotics_signal
 from core.robotics_units import convert_robotics_inputs
 from core.training_data_card import build_training_data_card
+from integrations.recording_limits import RecordingSampleLimitExceeded
 
 API_VERSION = "3.1.0"
 ROBOTICS_ENGINE = RoboticsValidationEngine()
@@ -142,6 +149,7 @@ class ValidateRequest(BaseModel):
     robotics_profile: Literal["ftc", "frc"] | None = Field(default=None, description="Optional school-robot telemetry profile; only valid with simulation_type=robotics.")
     ftc_limits: dict[str, Any] = Field(default_factory=dict, description="Optional FTC/FRC screening thresholds, such as motor_power or heading_jump_deg.")
     urdf_xml: str | None = Field(default=None, description="Optional URDF XML for forward-kinematics consistency checks.")
+    kinematics_tolerance_m: float = Field(default=0.01, ge=0, description="Maximum reported-vs-URDF end-effector distance in meters.")
     @field_validator("conditions")
     @classmethod
     def validate_trajectory_options(cls, value):
@@ -186,6 +194,13 @@ class ValidateRequest(BaseModel):
             raise ValueError("urdf_xml exceeds the 2 MiB request limit")
         return value
 
+    @field_validator("kinematics_tolerance_m")
+    @classmethod
+    def validate_kinematics_tolerance(cls, value):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("kinematics_tolerance_m must be finite and non-negative")
+        return value
+
     job_id: str | None = Field(default=None, description="Optional caller-supplied tracking id.")
     run_ai: bool = Field(default=True, description="Run the async AI reasoning layer.")
     deep_ai: bool = Field(
@@ -228,8 +243,8 @@ class StreamSyncRequest(BaseModel):
 
 
 class CompareSimRealRequest(BaseModel):
-    sim_data: list[dict[str, Any]] = Field(..., description="Simulated robotics samples.")
-    real_data: list[dict[str, Any]] = Field(..., description="Real-robot samples.")
+    sim_data: list[dict[str, Any]] = Field(..., min_length=1, description="Simulated robotics samples.")
+    real_data: list[dict[str, Any]] = Field(..., min_length=1, description="Real-robot samples.")
     robotics_limits: dict[str, tuple[float, float]] = Field(default_factory=dict)
     conditions: dict[str, float] = Field(default_factory=dict)
     sim_units: dict[str, str] = Field(default_factory=dict, description="Units declared for simulation signals.")
@@ -946,6 +961,94 @@ except Exception:
     APIE_AVAILABLE = False
 
 
+def _merge_kinematics_quality(
+    quality: dict[str, Any],
+    rows: list[dict[str, Any]],
+    robotics: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep per-episode export readiness aligned with requested URDF checks."""
+    episodes = quality.get("episodes")
+    if not isinstance(episodes, list):
+        return quality
+    normalized_rows = [
+        {normalize_robotics_signal(str(key)): value for key, value in row.items()}
+        for row in rows
+    ]
+    episode_key = next(
+        (key for key in ("episode_id", "episode", "trajectory_id", "sequence_id")
+         if any(key in row for row in normalized_rows)),
+        None,
+    )
+    by_id = {str(episode.get("episode_id", "(missing episode)")): episode
+             for episode in episodes if isinstance(episode, dict)}
+    labels_by_row: dict[int, list[tuple[str, str, str]]] = {}
+    for check in robotics.get("checks", []):
+        name = check.get("name")
+        if name == "robotics_kinematics:end_effector_position" and check.get("status") == "failed":
+            label = "kinematics_mismatch"
+        elif name == "robotics_kinematics:coverage" and check.get("status") == "warning":
+            label = "kinematics_unavailable"
+        else:
+            continue
+        for raw_index in check.get("indices", []):
+            try:
+                index = int(raw_index)
+            except (TypeError, ValueError):
+                continue
+            labels_by_row.setdefault(index, []).append(
+                (label, str(name), str(check.get("detail", "")))
+            )
+
+    if not labels_by_row:
+        return quality
+    for index, findings in labels_by_row.items():
+        if index < 0 or index >= len(rows):
+            continue
+        source = normalized_rows[index]
+        episode_id = str(source.get(episode_key, "(missing episode)")) if episode_key else "Episode 1"
+        episode = by_id.get(episode_id)
+        if episode is None:
+            continue
+        flagged = episode.setdefault("flagged_rows", [])
+        if index not in flagged:
+            flagged.append(index)
+        for label, check_name, detail in findings:
+            labels = episode.setdefault("failure_labels", [])
+            if label not in labels:
+                labels.append(label)
+            check_entry = {"name": check_name, "detail": detail}
+            if label == "kinematics_mismatch":
+                failed_checks = episode.setdefault("failed_checks", [])
+                if check_entry not in failed_checks:
+                    failed_checks.append(check_entry)
+                episode["verdict"] = "failed"
+            else:
+                warnings = episode.setdefault("warnings", [])
+                if check_entry not in warnings:
+                    warnings.append(check_entry)
+                if episode.get("verdict") != "failed":
+                    episode["verdict"] = "warning"
+            episode["training_ready"] = False
+
+    summary = quality.setdefault("summary", {})
+    ready = sum(bool(episode.get("training_ready")) for episode in episodes)
+    summary["training_ready_episodes"] = ready
+    summary["removed_episodes"] = len(episodes) - ready
+    summary["flagged_rows"] = len({
+        int(index)
+        for episode in episodes
+        for index in episode.get("flagged_rows", [])
+        if isinstance(index, int)
+    })
+    if any(episode.get("verdict") == "failed" for episode in episodes):
+        quality["verdict"] = "failed"
+    elif any(episode.get("verdict") == "warning" for episode in episodes):
+        quality["verdict"] = "warning"
+    else:
+        quality["verdict"] = "passed"
+    return quality
+
+
 async def _validate_robotics_core(
     req: ValidateRequest,
     df: pd.DataFrame,
@@ -955,11 +1058,35 @@ async def _validate_robotics_core(
     """Run robotics checks as the verdict source; expose other engines only as comparisons."""
     if req.robotics_profile in {"ftc", "frc"}:
         return await _validate_ftc_profile(req, jid)
+    if not req.data:
+        raise SimAPIError(
+            "Robotics validation requires at least one sample.",
+            code=ErrorCode.BAD_REQUEST,
+        )
     if req.robotics_profile is not None and req.simulation_type != SimulationType.ROBOTICS:
         raise SimAPIError(
             "robotics_profile is only valid when simulation_type is 'robotics'.",
             code=ErrorCode.BAD_REQUEST,
         )
+    additional_suites = None
+    prismatic_signals: set[str] = set()
+    if req.urdf_xml is not None:
+        try:
+            kinematics_suite = KinematicsSuite(
+                req.urdf_xml, tolerance_m=req.kinematics_tolerance_m
+            )
+            additional_suites = [kinematics_suite]
+            for joint in kinematics_suite.urdf_geometry.active_joints:
+                if joint.joint_type == "prismatic":
+                    position_signal = joint_signal_name(joint.name)
+                    prismatic_signals.update(
+                        {position_signal, position_signal.removesuffix("_position") + "_velocity"}
+                    )
+        except (TypeError, ValueError) as exc:
+            raise SimAPIError(
+                f"Invalid URDF kinematics configuration: {exc}",
+                code=ErrorCode.BAD_REQUEST,
+            ) from exc
     try:
         df, source_rows, limits, conversions = convert_robotics_inputs(
             df,
@@ -967,6 +1094,7 @@ async def _validate_robotics_core(
             req.units,
             req.robotics_limits,
             req.robotics_limit_units,
+            prismatic_signals=prismatic_signals,
         )
     except ValueError as exc:
         raise SimAPIError(str(exc), code=ErrorCode.BAD_REQUEST) from exc
@@ -979,6 +1107,7 @@ async def _validate_robotics_core(
         limits,
         source_rows=source_rows,
         conditions=req.conditions,
+        additional_suites=additional_suites,
     )
     processing_ms = round((time.perf_counter() - started) * 1000.0, 1)
     if conversions:
@@ -1110,10 +1239,14 @@ async def _validate_robotics_core(
     if robotics.get("summary", {}).get("episodes"):
         try:
             from core.physical_ai import episode_quality
-            result["episode_quality"] = episode_quality(
+            result["episode_quality"] = _merge_kinematics_quality(
+                episode_quality(
+                    source_rows,
+                    robotics_limits=limits,
+                    conditions=req.conditions,
+                ),
                 source_rows,
-                robotics_limits=limits,
-                conditions=req.conditions,
+                robotics,
             )
         except Exception as exc:
             # Preserve a valid primary robotics report if the optional
@@ -1565,6 +1698,258 @@ async def compare_sim_real_endpoint(req: CompareSimRealRequest, _: str = Depends
     return result
 
 
+def _recording_source_name(filename: str | None) -> str:
+    """Return a display-only basename for untrusted client upload names."""
+    return (filename or "recording").replace("\\", "/").rsplit("/", 1)[-1] or "recording"
+
+
+async def _stream_recording_upload(file: UploadFile, destination: Path, max_bytes: int) -> tuple[bytes, int]:
+    """Copy an UploadFile to disk in bounded chunks and enforce the cap while reading."""
+    total = 0
+    prefix = bytearray()
+    with destination.open("wb") as output:
+        while chunk := await file.read(64 * 1024):
+            total += len(chunk)
+            if total > max_bytes:
+                raise PayloadTooLargeError(
+                    f"Recording upload exceeds the maximum of {max_bytes} bytes.",
+                    details={"bytes": total, "limit": max_bytes},
+                )
+            if len(prefix) < 16:
+                prefix.extend(chunk[: 16 - len(prefix)])
+            output.write(chunk)
+    return bytes(prefix), total
+
+
+def _safe_zip_destination(root: Path, name: str) -> Path:
+    if not name or "\x00" in name:
+        raise ValueError("ZIP recording contains an invalid path.")
+    posix = PurePosixPath(name)
+    windows = PureWindowsPath(name)
+    parts = tuple(part for part in posix.parts if part not in ("", "."))
+    if (
+        posix.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or any(part == ".." for part in parts)
+        or any(part == ".." for part in windows.parts)
+    ):
+        raise ValueError("ZIP recording contains a path that escapes its upload directory.")
+    if not parts:
+        return root
+    destination = root.joinpath(*parts)
+    if not destination.resolve().is_relative_to(root.resolve()):
+        raise ValueError("ZIP recording contains a path that escapes its upload directory.")
+    return destination
+
+
+def _extract_recording_zip(
+    archive_path: Path,
+    destination: Path,
+    max_bytes: int,
+    max_entries: int,
+) -> tuple[str, Path]:
+    """Extract a bounded ZIP without following links or accepting path traversal."""
+    destination.mkdir(parents=True, exist_ok=True)
+    total_size = 0
+    written_paths: set[Path] = set()
+    try:
+        with zipfile.ZipFile(archive_path) as bundle:
+            entries = bundle.infolist()
+            if len(entries) > max_entries:
+                raise PayloadTooLargeError(
+                    f"Recording ZIP contains {len(entries)} entries; the entry limit is {max_entries}.",
+                    details={"entries": len(entries), "limit": max_entries},
+                )
+            for info in entries:
+                target = _safe_zip_destination(destination, info.filename)
+                if target == destination and not info.is_dir():
+                    raise ValueError("ZIP recording contains an empty file path.")
+                mode = info.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise ValueError("ZIP recording cannot contain symbolic links.")
+                if target in written_paths:
+                    raise ValueError("ZIP recording contains duplicate file paths.")
+                written_paths.add(target)
+                if info.file_size > max_bytes or total_size + info.file_size > max_bytes:
+                    raise PayloadTooLargeError(
+                        f"Expanded recording ZIP exceeds the maximum of {max_bytes} bytes.",
+                        details={"expanded_bytes": total_size + info.file_size, "limit": max_bytes},
+                    )
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(info) as source, target.open("xb") as output:
+                    while chunk := source.read(64 * 1024):
+                        total_size += len(chunk)
+                        if total_size > max_bytes:
+                            raise PayloadTooLargeError(
+                                f"Expanded recording ZIP exceeds the maximum of {max_bytes} bytes.",
+                                details={"expanded_bytes": total_size, "limit": max_bytes},
+                            )
+                        output.write(chunk)
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Upload starts with ZIP bytes but is not a valid ZIP archive.") from exc
+
+    # A rosbag2 ZIP must expose one bag directory; a LeRobot ZIP may have
+    # multiple parquet shards anywhere below its dataset root.
+    bag_directories: set[Path] = set()
+    sqlite_files: list[Path] = []
+    mcap_files: list[Path] = []
+    parquet_files: list[Path] = []
+    for child in destination.rglob("*"):
+        if not child.is_file():
+            continue
+        try:
+            with child.open("rb") as stream:
+                signature = stream.read(16)
+        except OSError:
+            continue
+        if signature.startswith(b"SQLite format 3\x00"):
+            sqlite_files.append(child)
+        elif signature.startswith(b"\x89MCAP0\r\n"):
+            mcap_files.append(child)
+        elif signature.startswith(b"PAR1"):
+            parquet_files.append(child)
+        if child.name.lower() == "metadata.yaml":
+            bag_directories.add(child.parent)
+
+    rosbag_paths = [
+        parent for parent in bag_directories
+        if any(path.parent == parent for path in sqlite_files + mcap_files)
+    ]
+    has_rosbag = bool(rosbag_paths) or (len(sqlite_files) == 1 and not parquet_files)
+    has_mcap = len(mcap_files) == 1 and not parquet_files and not has_rosbag
+    has_lerobot = bool(parquet_files) and not has_rosbag and not mcap_files
+    if sum((has_rosbag, has_mcap, has_lerobot)) != 1:
+        raise ValueError(
+            "ZIP must contain one rosbag2 bag, one MCAP recording, or a LeRobot parquet dataset."
+        )
+    if has_rosbag:
+        if rosbag_paths:
+            if len(rosbag_paths) != 1:
+                raise ValueError("ZIP contains multiple rosbag2 bag directories; upload one recording at a time.")
+            return "rosbag2", rosbag_paths[0]
+        return "rosbag2", sqlite_files[0]
+    if has_mcap:
+        return "mcap", mcap_files[0]
+    return "lerobot", destination
+
+
+def _recording_file_kind(
+    path: Path,
+    prefix: bytes,
+    expanded_dir: Path,
+    max_bytes: int,
+    max_entries: int,
+) -> tuple[str, Path]:
+    if prefix.startswith(b"PAR1"):
+        return "lerobot", path
+    if prefix.startswith(b"SQLite format 3\x00"):
+        return "rosbag2", path
+    if prefix.startswith(b"\x89MCAP0\r\n"):
+        return "mcap", path
+    if prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return _extract_recording_zip(path, expanded_dir, max_bytes, max_entries)
+    raise SimAPIError(
+        "Unsupported recording content. Upload a ROS 2 .db3/.mcap recording, a rosbag2 ZIP, or a LeRobot .parquet/ZIP.",
+        code=ErrorCode.UNSUPPORTED_FORMAT,
+        status_code=415,
+        details={"supported": ["rosbag2 .db3", "rosbag2 ZIP", "MCAP", "LeRobot parquet", "LeRobot ZIP"]},
+    )
+
+
+async def _load_recording_upload(
+    file: UploadFile,
+    *,
+    topic_hint: str,
+) -> tuple[list[dict[str, Any]], str, int]:
+    """Load and convert an upload once; all temporary bytes disappear before validation."""
+    with tempfile.TemporaryDirectory(prefix="simapi-recording-") as temp_name:
+        temp_dir = Path(temp_name)
+        raw_path = temp_dir / "upload.bin"
+        prefix, _bytes = await _stream_recording_upload(file, raw_path, settings.max_upload_bytes)
+        expanded_dir = temp_dir / "expanded"
+        try:
+            recording_format, source_path = _recording_file_kind(
+                raw_path,
+                prefix,
+                expanded_dir,
+                settings.max_upload_bytes,
+                settings.max_recording_zip_entries,
+            )
+            # Reader plugins dispatch standalone files by their storage suffix.
+            # Assign the suffix from the detected content, never from the
+            # client-provided filename, so arbitrary upload names still work.
+            if source_path == raw_path:
+                suffix = {"rosbag2": ".db3", "mcap": ".mcap", "lerobot": ".parquet"}[recording_format]
+                typed_path = temp_dir / f"upload{suffix}"
+                raw_path.replace(typed_path)
+                source_path = typed_path
+            if recording_format == "lerobot":
+                from integrations.lerobot_loader import load_lerobot
+
+                frame = await asyncio.to_thread(
+                    load_lerobot, source_path, max_rows=settings.max_recording_rows
+                )
+            else:
+                from integrations.ros2_loader import load_rosbag2
+
+                frame = await asyncio.to_thread(
+                    load_rosbag2,
+                    source_path,
+                    topic_hint=topic_hint,
+                    max_rows=settings.max_recording_rows,
+                )
+        except RecordingSampleLimitExceeded as exc:
+            raise PayloadTooLargeError(
+                str(exc), details={"rows": exc.rows, "limit": exc.limit}
+            ) from exc
+        except SimAPIError:
+            raise
+        except RuntimeError as exc:
+            message = str(exc)
+            if "optional" in message.lower() or "requires" in message.lower():
+                raise SimAPIError(
+                    f"{message}. Install the optional robotics data dependencies with `pip install -e '.[robotics-data]'`.",
+                    code=ErrorCode.UNSUPPORTED_FORMAT,
+                    status_code=501,
+                ) from exc
+            raise SimAPIError(message, code=ErrorCode.BAD_REQUEST) from exc
+        except (ValueError, FileNotFoundError, zipfile.BadZipFile) as exc:
+            raise SimAPIError(str(exc), code=ErrorCode.BAD_REQUEST) from exc
+        except Exception as exc:
+            # Reader libraries expose format-specific exceptions. Keep the
+            # shared API envelope while telling the caller what the parser saw.
+            raise SimAPIError(
+                f"Could not read the uploaded {recording_format} recording: {exc}",
+                code=ErrorCode.BAD_REQUEST,
+            ) from exc
+
+        rows = len(frame)
+        if rows > settings.max_recording_rows:
+            raise PayloadTooLargeError(
+                f"Recording contains {rows} converted samples; the recording limit is {settings.max_recording_rows}.",
+                details={"rows": rows, "limit": settings.max_recording_rows},
+            )
+        records = frame.astype(object).where(pd.notna(frame), None).to_dict(orient="records")
+        del frame
+        return records, recording_format, rows
+
+
+def _parse_recording_form_json(field_name: str, raw_value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_value or "{}")
+    except json.JSONDecodeError as exc:
+        raise SimAPIError(
+            f"`{field_name}` must be valid JSON: {exc.msg}.", code=ErrorCode.BAD_REQUEST
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise SimAPIError(f"`{field_name}` must be a JSON object.", code=ErrorCode.BAD_REQUEST)
+    return parsed
+
+
 # ── Validation endpoints ─────────────────────────────────────────────────────────
 @app.post("/v1/validate", tags=["validation"])
 async def validate(req: ValidateRequest, _: str = Depends(caller_identity)):
@@ -1607,6 +1992,44 @@ async def validate_upload(
         run_ai=run_ai.lower() == "true",
     )
     return await _validate_core(req)
+
+
+@app.post("/v1/validate/recording", tags=["validation"])
+async def validate_recording_upload(
+    file: UploadFile = File(...),
+    topic_hint: str = Form("joint_states"),
+    robotics_limits: str = Form("{}"),
+    conditions: str = Form("{}"),
+    _: str = Depends(caller_identity),
+):
+    """Validate a ROS 2/MCAP/LeRobot recording using the standard robotics report."""
+    source_name = _recording_source_name(file.filename)
+    try:
+        limits = _parse_recording_form_json("robotics_limits", robotics_limits)
+        parsed_conditions = _parse_recording_form_json("conditions", conditions)
+        rows, recording_format, converted_rows = await _load_recording_upload(
+            file, topic_hint=topic_hint
+        )
+    finally:
+        await file.close()
+
+    try:
+        validate_request = ValidateRequest(
+            data=rows,
+            simulation_type=SimulationType.ROBOTICS,
+            robotics_limits=limits,
+            conditions=parsed_conditions,
+            run_ai=False,
+        )
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+    report = await _validate_core(validate_request)
+    report["recording"] = {
+        "format": recording_format,
+        "rows": converted_rows,
+        "source_name": source_name,
+    }
+    return report
 
 
 @app.post("/v1/validate/physics-only", tags=["validation"])

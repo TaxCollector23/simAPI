@@ -7,22 +7,24 @@ without growing a single robotics validation function.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import pandas as pd
 
+from core.kinematics import URDFGeometry, forward_kinematics, joint_signal_name, parse_urdf_geometry
 from core.robotics_evidence import build_evidence
-from core.robotics_trajectory import analyze_trajectories, normalize
+from core.robotics_trajectory import GROUP_KEYS, TIME_KEYS, analyze_trajectories, normalize, number
 
-# Broad screening bounds only. Robot-specific values should come from the
-# model or controller and replace these for the matching signal.
+# Tight screening bounds only; these are still not robot limits. Robot-specific
+# values should come from the model or controller and replace these per signal.
 DEFAULT_ROBOTICS_LIMITS: dict[str, tuple[float, float]] = {
-    "joint_torque": (-100_000.0, 100_000.0),
-    "joint_velocity": (-500.0, 500.0),
-    "joint_acceleration": (-5_000.0, 5_000.0),
+    "joint_torque": (-200.0, 200.0),
+    "joint_velocity": (-10.0, 10.0),
+    "joint_acceleration": (-50.0, 50.0),
     "joint_position": (-4 * 3.141592653589793, 4 * 3.141592653589793),
-    "end_effector_force": (-50_000.0, 50_000.0),
+    "end_effector_force": (-1_000.0, 1_000.0),
     "end_effector_torque": (-10_000.0, 10_000.0),
     "end_effector_velocity": (0.0, 200.0),
     "position_error": (0.0, 500.0),
@@ -57,6 +59,7 @@ class RoboticsSuiteResult:
     checks: list[dict[str, Any]] = field(default_factory=list)
     excluded: dict[int, list[str]] = field(default_factory=dict)
     summary: dict[str, Any] = field(default_factory=dict)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 class RoboticsCheckSuite(Protocol):
@@ -142,6 +145,159 @@ class TrajectorySuite:
         )
 
 
+class KinematicsSuite:
+    """Compare reported end-effector positions with a parsed URDF FK chain."""
+
+    name = "kinematics"
+    _END_EFFECTOR_COLUMNS = (
+        ("end_effector_x", "end_effector_y", "end_effector_z"),
+        ("end_effector_position_x", "end_effector_position_y", "end_effector_position_z"),
+    )
+
+    def __init__(
+        self,
+        urdf_geometry: URDFGeometry | str,
+        joint_signal_map: dict[str, str] | None = None,
+        tolerance_m: float = 0.01,
+    ) -> None:
+        if isinstance(urdf_geometry, str):
+            urdf_geometry = parse_urdf_geometry(urdf_geometry)
+        if not isinstance(urdf_geometry, URDFGeometry):
+            raise TypeError("urdf_geometry must be URDFGeometry or URDF XML text")
+        if not math.isfinite(tolerance_m) or tolerance_m < 0:
+            raise ValueError("tolerance_m must be finite and non-negative")
+        self.urdf_geometry = urdf_geometry
+        self.joint_signal_map = {
+            str(joint): normalize(str(signal)) for joint, signal in (joint_signal_map or {}).items()
+        }
+        self.tolerance_m = float(tolerance_m)
+
+    def run(self, context: RoboticsValidationContext) -> RoboticsSuiteResult:
+        columns = {normalize(str(column)) for column in context.data.columns}
+        rows = [{normalize(str(key)): value for key, value in row.items()} for row in context.source_rows]
+        endpoint_columns = next(
+            (signals for signals in self._END_EFFECTOR_COLUMNS if set(signals).issubset(columns)),
+            None,
+        )
+        joint_signals = {
+            joint.name: self.joint_signal_map.get(joint.name, normalize(joint_signal_name(joint.name)))
+            for joint in self.urdf_geometry.active_joints
+        }
+        required_signals = set(joint_signals.values())
+        time_key = next((key for key in TIME_KEYS if key in columns), None)
+        group_key = next((key for key in GROUP_KEYS if key in columns), None)
+        checks: list[dict[str, Any]] = []
+        excluded: dict[int, list[str]] = {}
+        evidence: list[dict[str, Any]] = []
+        failed_indices: list[int] = []
+        skipped_reasons: dict[int, str] = {}
+        evaluated = 0
+
+        if endpoint_columns is None:
+            skipped_reasons = {
+                index: "URDF FK could not run because reported end-effector x, y, and z signals are missing."
+                for index in range(len(rows))
+            }
+        elif not required_signals.issubset(columns):
+            missing_signals = sorted(required_signals.difference(columns))
+            reason = (
+                "URDF FK could not run because joint position signals are missing: "
+                + ", ".join(missing_signals)
+                + "."
+            )
+            skipped_reasons = {index: reason for index in range(len(rows))}
+
+        for index, row in enumerate(rows) if endpoint_columns is not None and required_signals.issubset(columns) else ():
+            joint_values: dict[str, float] = {}
+            missing = False
+            for _joint_name, signal in joint_signals.items():
+                value = number(row.get(signal))
+                if value is None:
+                    missing = True
+                    break
+                joint_values[signal] = value
+            reported_values = [number(row.get(signal)) for signal in endpoint_columns]
+            if missing:
+                skipped_reasons[index] = "URDF FK could not run because a joint position is missing or non-finite."
+                continue
+            if any(value is None for value in reported_values):
+                skipped_reasons[index] = "URDF FK could not run because reported end-effector x, y, or z is missing or non-finite."
+                continue
+            computed = forward_kinematics(self.urdf_geometry, joint_values, joint_signals)
+            reported = tuple(float(value) for value in reported_values if value is not None)
+            distance = math.dist(computed, reported)
+            evaluated += 1
+            if distance <= self.tolerance_m:
+                continue
+            failed_indices.append(index)
+            detail = (
+                f"Reported end-effector position differs from URDF forward kinematics by "
+                f"{distance:.6g} m, above the {self.tolerance_m:.6g} m tolerance."
+            )
+            excluded[index] = [detail]
+            normalized_row = rows[index]
+            episode_id = str(normalized_row.get(group_key, "(missing episode)")) if group_key else "Episode 1"
+            time_value = number(normalized_row.get(time_key)) if time_key else None
+            evidence.append({
+                "check": "robotics_kinematics:end_effector_position",
+                "status": "failed",
+                "signal": "end_effector_position",
+                "episode_id": episode_id,
+                "sample_index": index,
+                "time": time_value,
+                "observed": distance,
+                "expected": [0.0, self.tolerance_m],
+                "detail": detail,
+                "computed_position": {axis: value for axis, value in zip(("x", "y", "z"), computed, strict=True)},
+                "reported_position": {axis: value for axis, value in zip(("x", "y", "z"), reported, strict=True)},
+                "distance_m": distance,
+            })
+
+        for index, reason in skipped_reasons.items():
+            excluded[index] = [reason]
+        summary = {
+            "kinematics": {
+                "evaluated_rows": evaluated,
+                "skipped_rows": len(skipped_reasons),
+                "total_rows": len(rows),
+                "coverage": evaluated / len(rows) if rows else 0.0,
+                "tolerance_m": self.tolerance_m,
+            }
+        }
+        if skipped_reasons:
+            checks.append({
+                "name": "robotics_kinematics:coverage",
+                "column": "end_effector_position",
+                "status": "warning",
+                "indices": sorted(skipped_reasons),
+                "violations": len(skipped_reasons),
+                "detail": (
+                    f"URDF FK evaluated {evaluated} of {len(rows)} sample(s); "
+                    f"{len(skipped_reasons)} sample(s) could not be evaluated."
+                ),
+            })
+        if not evaluated:
+            return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary)
+        count_failed = len(failed_indices)
+        status = "failed" if count_failed else "passed"
+        detail = (
+            f"{count_failed} sample(s) exceed the {self.tolerance_m:g} m end-effector position tolerance."
+            if count_failed
+            else f"All {evaluated} evaluated sample(s) are within the {self.tolerance_m:g} m end-effector position tolerance."
+        )
+        checks.append({
+            "name": "robotics_kinematics:end_effector_position",
+            "column": "end_effector_position",
+            "status": status,
+            "low": 0.0,
+            "high": self.tolerance_m,
+            "indices": failed_indices,
+            "violations": count_failed,
+            "detail": detail,
+        })
+        return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary, evidence=evidence)
+
+
 class RoboticsValidationEngine:
     """Run an ordered collection of checks and assemble a stable report.
 
@@ -161,6 +317,7 @@ class RoboticsValidationEngine:
         configured_limits: dict[str, tuple[float, float]] | None = None,
         source_rows: list[dict[str, Any]] | None = None,
         conditions: dict[str, float] | None = None,
+        additional_suites: list[RoboticsCheckSuite] | None = None,
     ) -> dict[str, Any]:
         configured = {
             normalize(str(signal)): (float(bounds[0]), float(bounds[1]))
@@ -175,6 +332,19 @@ class RoboticsValidationEngine:
                         limits[canonical] = DEFAULT_ROBOTICS_LIMITS["joint_" + quantity]
         limits.update(configured)
 
+        # These defaults screen for implausible values but cannot represent a
+        # particular robot. Track only present joint signals for which the
+        # resolved bound came from the screening defaults, without changing
+        # the existing effort/torque naming behavior.
+        unprofiled_signals = sorted(
+            {
+                normalize(str(column))
+                for column in data.columns
+                if normalize(str(column)).startswith("joint_")
+                and normalize(str(column)) in limits
+                and normalize(str(column)) not in configured
+            }
+        )
         joint_signals = sorted(
             {
                 normalize(str(column))
@@ -212,6 +382,7 @@ class RoboticsValidationEngine:
         )
         checks: list[dict[str, Any]] = []
         excluded: dict[int, list[str]] = {}
+        extra_evidence: list[dict[str, Any]] = []
         summary: dict[str, Any] = {
             "engine_version": None,
             "episodes": [],
@@ -221,12 +392,30 @@ class RoboticsValidationEngine:
             "limits_source": limits_source,
             "limit_fallback_signals": fallback_signals,
         }
-        for suite in self.suites:
+        suites = [*self.suites, *(additional_suites or [])]
+        for suite in suites:
             result = suite.run(context)
             checks.extend(result.checks)
+            extra_evidence.extend(result.evidence)
             for row, reasons in result.excluded.items():
                 excluded.setdefault(row, []).extend(reasons)
             summary.update(result.summary)
+
+        if unprofiled_signals:
+            checks.append(
+                {
+                    "name": "robotics_unprofiled_signal",
+                    "status": "warning",
+                    "column": None,
+                    "violations": 0,
+                    "detail": (
+                        "Signals validated with screening defaults only — supply a profile "
+                        "(or import a URDF) for real limits: "
+                        + ", ".join(unprofiled_signals)
+                    ),
+                }
+            )
+            summary["unprofiled_signals"] = unprofiled_signals
 
         episode_key = summary.get("episode_column")
         episode_counts: dict[str, int] = {}
@@ -237,7 +426,18 @@ class RoboticsValidationEngine:
         for episode in summary.get("episodes", []):
             episode["flagged_samples"] = episode_counts.get(episode["episode_id"], 0)
 
-        evidence = build_evidence(rows, checks, limits, options, summary)
+        # KinematicsSuite supplies richer computed-vs-reported sample evidence.
+        # The generic builder cannot reconstruct those values from a scalar
+        # column, so skip only that check there and append its suite evidence.
+        ordinary_checks = [
+            check for check in checks
+            if check.get("name") != "robotics_kinematics:end_effector_position"
+        ]
+        evidence = build_evidence(rows, ordinary_checks, limits, options, summary)
+        if extra_evidence:
+            total = evidence["total"] + len(extra_evidence)
+            entries = (evidence["entries"] + extra_evidence)[:1000]
+            evidence = {"entries": entries, "total": total, "truncated": total > len(entries)}
         return {
             "checks": checks,
             "excluded": excluded,

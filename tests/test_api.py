@@ -330,6 +330,174 @@ def test_robotics_episode_quality_uses_fixed_failure_labels(client):
     assert set(bad_episode["failure_labels"]).issubset(FAILURE_LABELS)
 
 
+def test_robotics_episode_quality_is_returned_for_a_single_episode(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"episode_id": "one", "time": 0.0, "joint_1_position": 0.0},
+            {"episode_id": "one", "time": 0.1, "joint_1_position": 0.1},
+        ],
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_1_position": [-1.0, 1.0]},
+    })
+
+    assert response.status_code == 200
+    episodes = response.json()["episode_quality"]["episodes"]
+    assert len(episodes) == 1
+    assert episodes[0]["episode_id"] == "one"
+    assert episodes[0]["training_ready"] is True
+
+
+def test_generic_robotics_validation_rejects_empty_rows(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [],
+        "simulation_type": "robotics",
+    })
+    assert response.status_code == 400
+    assert "at least one sample" in response.json()["error"]["message"]
+
+
+def test_ftc_profile_api_dispatch_and_fail_closed_empty_logs(client):
+    passing = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"time": 0.0, "left_motor_power": 0.2},
+            {"time": 0.02, "left_motor_power": 0.3},
+        ],
+        "simulation_type": "robotics",
+        "robotics_profile": "ftc",
+    })
+    failing = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0.0, "left_motor_power": 1.4}],
+        "simulation_type": "robotics",
+        "robotics_profile": "ftc",
+    })
+    empty = client.post("/v1/validate/physics-only", json={
+        "data": [],
+        "simulation_type": "robotics",
+        "robotics_profile": "ftc",
+    })
+    unrecognized = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0.0, "comment": "no robot signals"}],
+        "simulation_type": "robotics",
+        "robotics_profile": "frc",
+    })
+
+    assert [r.status_code for r in (passing, failing, empty, unrecognized)] == [200, 200, 200, 200]
+    assert passing.json()["status"] in {"passed", "warning"}
+    assert passing.json()["profile"] == "ftc"
+    assert failing.json()["status"] == "failed"
+    assert failing.json()["training_ready"] is False
+    assert empty.json()["status"] == "failed"
+    assert empty.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "no_data"
+    assert unrecognized.json()["status"] == "failed"
+    assert unrecognized.json()["ftc_frc_report"]["failed_checks"][0]["name"] == "no_robot_signals"
+
+
+_SIMPLE_URDF = """<robot name="one_joint">
+  <link name="base"/><link name="tool"/>
+  <joint name="joint_1" type="revolute"><parent link="base"/><child link="tool"/>
+    <origin xyz="1 0 0"/><axis xyz="0 0 1"/>
+  </joint>
+</robot>"""
+
+
+def test_urdf_kinematics_api_verdict_and_episode_export_quality(client):
+    limits = {"joint_1_position": [-3.14, 3.14]}
+    passing = client.post("/v1/validate/physics-only", json={
+        "data": [{
+            "episode_id": "aligned", "time": 0.0, "joint_1_position": 0.0,
+            "end_effector_x": 1.0, "end_effector_y": 0.0, "end_effector_z": 0.0,
+        }],
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+        "urdf_xml": _SIMPLE_URDF,
+        "run_ai": False,
+    })
+    mismatched = client.post("/v1/validate/physics-only", json={
+        "data": [{
+            "Episode-ID": "bad_fk", "time": 0.0, "joint_1_position": 0.0,
+            "end_effector_x": 1.1, "end_effector_y": 0.0, "end_effector_z": 0.0,
+        }],
+        "simulation_type": "robotics",
+        "robotics_limits": limits,
+        "urdf_xml": _SIMPLE_URDF,
+        "run_ai": False,
+    })
+    invalid = client.post("/v1/validate/physics-only", json={
+        "data": [{"joint_1_position": 0.0}],
+        "simulation_type": "robotics",
+        "urdf_xml": "<robot",
+    })
+
+    assert passing.status_code == mismatched.status_code == 200
+    assert invalid.status_code == 400
+    assert next(check for check in passing.json()["robotics_checks"]
+                if check["name"] == "robotics_kinematics:end_effector_position")["status"] == "passed"
+    assert mismatched.json()["status"] == "failed"
+    episode = mismatched.json()["episode_quality"]["episodes"][0]
+    assert episode["training_ready"] is False
+    assert "kinematics_mismatch" in episode["failure_labels"]
+
+
+def test_urdf_kinematics_incomplete_coverage_is_a_warning_and_not_training_ready(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"episode_id": "partial", "time": 0.0, "joint_1_position": 0.0},
+            {"episode_id": "partial", "time": 0.1, "joint_1_position": 0.0,
+             "end_effector_x": 1.0, "end_effector_y": 0.0, "end_effector_z": 0.0},
+        ],
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_1_position": [-3.14, 3.14]},
+        "urdf_xml": _SIMPLE_URDF,
+        "run_ai": False,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "warning"
+    assert body["training_ready"] is False
+    coverage = next(check for check in body["robotics_checks"]
+                    if check["name"] == "robotics_kinematics:coverage")
+    assert coverage["indices"] == [0]
+    quality = body["episode_quality"]["episodes"][0]
+    assert quality["training_ready"] is False
+    assert "kinematics_unavailable" in quality["failure_labels"]
+    assert quality["flagged_rows"] == [0]
+
+
+def test_prismatic_joint_urdf_allows_meter_units(client):
+    prismatic_urdf = """<robot name="slide">
+      <link name="base"/><link name="tool"/>
+      <joint name="slide" type="prismatic"><parent link="base"/><child link="tool"/>
+        <axis xyz="0 0 1"/>
+      </joint>
+    </robot>"""
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{
+            "joint_slide_position": 0.25,
+            "end_effector_x": 0.0,
+            "end_effector_y": 0.0,
+            "end_effector_z": 0.25,
+        }],
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_slide_position": [-1.0, 1.0]},
+        "units": {"joint_slide_position": "m"},
+        "urdf_xml": prismatic_urdf,
+        "run_ai": False,
+    })
+    wrong_unit = client.post("/v1/validate/physics-only", json={
+        "data": [{"joint_slide_position": 0.25}],
+        "simulation_type": "robotics",
+        "units": {"joint_slide_position": "rad"},
+        "urdf_xml": prismatic_urdf,
+    })
+
+    assert response.status_code == 200
+    assert response.json()["robotics_summary"]["unit_conversions"] == {
+        "joint_slide_position": "m->m"
+    }
+    assert wrong_unit.status_code == 400
+
+
 def test_robotics_general_analysis_is_opt_in_and_comparison_only(client, monkeypatch):
     import api.server as server
 
@@ -435,3 +603,39 @@ def test_sim_real_compare_endpoint_reports_velocity_drift_and_one_sided_signals(
     assert body["verdict"] == "drift_detected"
     assert body["signals"]["joint_1_velocity_fd"]["overlap"] < 0.5
     assert body["signals_only_in_sim"] == ["sim_only"]
+
+
+def test_sim_real_endpoint_normalizes_declared_degrees_before_comparison(client):
+    radians = [0.0, 0.1, 0.2, 0.3]
+    response = client.post("/v1/compare/sim-real", json={
+        "sim_data": [{"t": i * 0.1, "joint_1_position": value}
+                     for i, value in enumerate(radians)],
+        "real_data": [{"t": i * 0.1, "joint_1_position": value * 180 / 3.141592653589793}
+                      for i, value in enumerate(radians)],
+        "real_units": {"joint_1_position": "deg"},
+        "robotics_limits": {"joint_1_position": [-1.0, 1.0]},
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["verdict"] == "aligned"
+    assert body["signals"]["joint_1_position"]["overlap"] == pytest.approx(1.0)
+    assert body["unit_conversions"]["real"] == {"joint_1_position": "deg->rad"}
+
+
+def test_sim_real_endpoint_does_not_call_metadata_only_tables_aligned(client):
+    response = client.post("/v1/compare/sim-real", json={
+        "sim_data": [{"episode_id": "s", "time": 0.0}],
+        "real_data": [{"episode_id": "r", "time": 0.0}],
+    })
+
+    assert response.status_code == 200
+    assert response.json()["verdict"] == "insufficient_data"
+
+
+def test_sim_real_endpoint_rejects_empty_data_sides(client):
+    response = client.post("/v1/compare/sim-real", json={
+        "sim_data": [],
+        "real_data": [{"joint_1_position": 0.0}],
+    })
+    assert response.status_code == 422

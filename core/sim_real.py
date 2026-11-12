@@ -114,7 +114,7 @@ def _overlap(sim: dict[str, float], real: dict[str, float]) -> float:
     return float(intersection / union)
 
 
-def _checks(report: Mapping[str, Any] | None) -> dict[str, bool]:
+def _checks(report: Mapping[str, Any] | None) -> dict[str, str]:
     if not report:
         return {}
     raw_checks = report.get("checks")
@@ -123,7 +123,11 @@ def _checks(report: Mapping[str, Any] | None) -> dict[str, bool]:
     if not isinstance(raw_checks, list):
         return {}
     return {
-        str(check["name"]): str(check.get("status", "")) == "passed"
+        str(check["name"]): (
+            str(check.get("status", "info")).lower()
+            if str(check.get("status", "info")).lower() in {"passed", "warning", "failed", "error", "info"}
+            else "info"
+        )
         for check in raw_checks
         if isinstance(check, Mapping) and check.get("name") is not None
     }
@@ -142,10 +146,14 @@ def _validation_summary(
         excluded_count = len(report["exclusions"])
     checks = _checks(report)
     checks_total = len(checks)
-    checks_passed = sum(checks.values())
+    checks_passed = sum(status == "passed" for status in checks.values())
     status = report.get("status")
     if status is None:
-        status = "failed" if any(not passed for passed in checks.values()) else "passed"
+        status = (
+            "failed" if any(value in {"failed", "error"} for value in checks.values())
+            else "warning" if any(value == "warning" for value in checks.values())
+            else "passed"
+        )
     return {
         "status": status,
         "training_ready": bool(report.get("training_ready", excluded_count == 0 and status == "passed")),
@@ -201,12 +209,23 @@ def compare_sim_real(
     sim_checks = _checks(sim_validation)
     real_checks = _checks(real_validation)
     all_check_names = sorted(set(sim_checks) | set(real_checks))
-    check_pass_rates = {
-        name: {"sim": sim_checks.get(name, False), "real": real_checks.get(name, False)}
+    check_statuses = {
+        name: {"sim": sim_checks.get(name, "not_run"), "real": real_checks.get(name, "not_run")}
         for name in all_check_names
     }
-    check_mismatch = any(values["sim"] != values["real"] for values in check_pass_rates.values())
+    check_pass_rates = {
+        name: {"sim": values["sim"] == "passed", "real": values["real"] == "passed"}
+        for name, values in check_statuses.items()
+    }
+    check_mismatch = any(values["sim"] != values["real"] for values in check_statuses.values())
 
+    verdict = (
+        "insufficient_data"
+        if not common_names
+        else "drift_detected"
+        if any_drift or check_mismatch
+        else "aligned"
+    )
     return {
         "sim": _validation_summary(sim_data, sim_validation),
         "real": _validation_summary(real_data, real_validation),
@@ -214,5 +233,11 @@ def compare_sim_real(
         "signals_only_in_sim": only_sim,
         "signals_only_in_real": only_real,
         "check_pass_rates": check_pass_rates,
-        "verdict": "drift_detected" if any_drift or check_mismatch else "aligned",
+        "check_statuses": check_statuses,
+        "verdict": verdict,
+        "comparison_note": (
+            None
+            if common_names
+            else "No common numeric signals were available to compare."
+        ),
     }

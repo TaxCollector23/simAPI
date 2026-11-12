@@ -10,10 +10,10 @@ const checks = [
   ["A clear report", "Review each recorded movement. Download your results and keep complete movements together."],
 ];
 const workflow = [
-  ["Bring your data", "Upload a CSV or JSON file."],
+  ["Bring your data", "Upload CSV or JSON, or open a supported ROS bag or MCAP recording."],
   ["Add your limits", "Use the settings for your arm."],
   ["Run a check", "See what passed and what needs a look."],
-  ["Use the result", "Review the report or stop a job when checks fail."],
+  ["Use the result", "Review the evidence or use the CLI exit code to gate a CI job."],
 ];
 
 export function RoboticsCapabilities() {
@@ -25,7 +25,7 @@ export function RoboticsCapabilities() {
             <div>
               <h2 className="max-w-md text-balance text-3xl font-medium leading-tight sm:text-4xl">Catch motion and data issues early.</h2>
               <p className="mt-6 max-w-md text-base leading-7 text-white/65">Check joint limits, trajectory continuity, timing, and agreement between recorded and derived motion.</p>
-              <Link href="/play" className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-accent-cyan hover:underline">Take a closer look <ArrowUpRight size={16} /></Link>
+              <Link href="/play" className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-accent-cyan hover:underline">Open the browser validator <ArrowUpRight size={16} /></Link>
               <p className="mt-8 max-w-md border-t border-white/10 pt-5 text-base leading-7 text-white/65">Use seconds and consistent units. SimAPI helps validate recorded data; it does not certify hardware or guarantee safe operation.</p>
             </div>
             <dl className="border-t border-white/10">
@@ -40,7 +40,7 @@ export function RoboticsCapabilities() {
 
       <section className="py-20 sm:py-28">
         <div className="container-tight">
-          <h2 className="max-w-2xl text-balance text-3xl font-medium sm:text-4xl">One validation flow, from data to deployment.</h2>
+          <h2 className="max-w-2xl text-balance text-3xl font-medium sm:text-4xl">From a robot recording to an evidence-based report.</h2>
           <ol className="mt-10 grid gap-8 border-y border-white/10 py-8 sm:grid-cols-2 lg:grid-cols-4">
             {workflow.map(([title, copy]) => <li key={title}><h3 className="text-xl font-medium">{title}</h3><p className="mt-3 text-sm leading-6 text-white/65">{copy}</p></li>)}
           </ol>

@@ -61,6 +61,8 @@ FAILURE_LABELS = (
     "time_gap",              # silent hole in the timestamps
     "time_disorder",         # time went backwards / repeated
     "inconsistent_velocity", # recorded velocity disagrees with the positions
+    "kinematics_mismatch",   # reported end-effector position disagrees with URDF FK
+    "kinematics_unavailable", # requested FK comparison could not evaluate every sample
 )
 
 EPISODE_KEYS = ("episode_id", "episode", "trajectory_id", "sequence_id")
@@ -72,10 +74,22 @@ TIME_KEYS = ("time", "t", "timestamp", "simulation_time", "sim_time", "elapsed_t
 # --------------------------------------------------------------------------
 
 def _episode_key_name(rows: list[dict[str, Any]]) -> str | None:
+    normalized_keys = {
+        str(key).strip().lower().replace("-", "_").replace(" ", "_")
+        for row in rows for key in row
+    }
     for key in EPISODE_KEYS:
-        if any(key in row for row in rows):
+        if key in normalized_keys:
             return key
     return None
+
+
+def _episode_value(row: dict[str, Any], key: str, default: Any = None) -> Any:
+    for source_key, value in row.items():
+        normalized = str(source_key).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == key:
+            return value
+    return default
 
 
 def _group_episodes(rows: list[dict[str, Any]]):
@@ -84,7 +98,7 @@ def _group_episodes(rows: list[dict[str, Any]]):
     groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     order: list[str] = []
     for idx, row in enumerate(rows):
-        name = str(row.get(key, "(missing episode)")) if key else "Episode 1"
+        name = str(_episode_value(row, key, "(missing episode)")) if key else "Episode 1"
         if name not in groups:
             groups[name] = []
             order.append(name)
@@ -282,6 +296,10 @@ def episode_quality(rows: list[dict[str, Any]],
             conditions=checked_conditions,
         )
         failed = [c for c in report.get("checks", []) if c.get("status") == "failed"]
+        unprofiled_warning = any(
+            c.get("name") == "robotics_unprofiled_signal" and c.get("status") == "warning"
+            for c in report.get("checks", [])
+        )
         labels = _labels_from_checks(report.get("checks", []))
         for extra in (_torque_saturation_labels(ep_rows, limits)
                       + _frozen_sensor_labels(ep_rows)):
@@ -291,21 +309,24 @@ def episode_quality(rows: list[dict[str, Any]],
         flagged_rows = [global_idx[i] for i in local_excluded if i < len(global_idx)]
         total_flagged += len(flagged_rows)
         bad = bool(failed) or bool(labels)
+        warning_only = not bad and unprofiled_warning
         episodes_out.append({
             "episode_id": name,
             "samples": len(ep_rows),
-            "verdict": "failed" if bad else "passed",
+            "verdict": "failed" if bad else "warning" if warning_only else "passed",
             "failure_labels": labels,
             "flagged_rows": flagged_rows,
             "failed_checks": [
                 {"name": c["name"], "detail": c.get("detail", "")} for c in failed
             ],
-            "training_ready": not bad,
+            "training_ready": not bad and not unprofiled_warning,
         })
     bad_eps = [e for e in episodes_out if not e["training_ready"]]
+    failed_eps = [e for e in episodes_out if e["verdict"] == "failed"]
+    warning_eps = [e for e in episodes_out if e["verdict"] == "warning"]
     return {
         "episodes": episodes_out,
-        "verdict": "failed" if bad_eps else "passed",
+        "verdict": "failed" if failed_eps else "warning" if warning_eps else "passed",
         "summary": {
             "episodes": len(episodes_out),
             "training_ready_episodes": len(episodes_out) - len(bad_eps),
@@ -474,7 +495,7 @@ def export_clean_dataset(rows: list[dict[str, Any]],
     key = _episode_key_name(rows)
     clean_rows = [
         row for row in rows
-        if (str(row.get(key, "(missing episode)")) if key else "Episode 1") not in bad_ids
+        if (str(_episode_value(row, key, "(missing episode)")) if key else "Episode 1") not in bad_ids
     ]
     report = {
         "kept_episodes": [e["episode_id"] for e in quality["episodes"]

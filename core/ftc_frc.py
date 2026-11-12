@@ -66,9 +66,11 @@ EPISODE_KEYS = ("episode_id", "episode", "match", "segment")
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         out = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return out if math.isfinite(out) else None
 
@@ -144,8 +146,17 @@ def validate_ftc_log(rows: list[dict[str, Any]],
         excluded.setdefault(row_idx, []).append(reason)
 
     if not rows:
-        return {"verdict": "passed", "failed_checks": [], "warnings": [],
-                "excluded_rows": {}, "episodes": [], "summary": {"rows": 0}}
+        return {
+            "verdict": "failed",
+            "failed_checks": [{
+                "name": "no_data",
+                "detail": "No rows provided — nothing to validate.",
+            }],
+            "warnings": [],
+            "excluded_rows": {},
+            "episodes": [],
+            "summary": {"rows": 0},
+        }
 
     def find_any(candidates) -> str | None:
         # Scan every row, not just the first: real logs sometimes have a
@@ -164,6 +175,26 @@ def validate_ftc_log(rows: list[dict[str, Any]],
     heading_cols = [c for c in columns
                     if c == "heading_deg" or c.endswith("_heading_deg")]
     voltage_col = next((c for c in columns if "battery" in c or c == "voltage"), None)
+
+    has_valid_time = any(_num(row.get(time_key)) is not None for row in rows)
+    if not has_valid_time:
+        warnings.setdefault("time_coverage", []).append(
+            "No numeric timestamp was found; encoder, heading, battery-sag, "
+            "and odometry step checks could not run."
+        )
+
+    has_supported_signal = bool(
+        power_cols
+        or voltage_col
+        or heading_cols
+        or any(c.endswith("_position") or c.endswith("_encoder") for c in columns)
+        or "x" in columns
+        or any(c.endswith("_x") for c in columns)
+    )
+    if not has_supported_signal:
+        failed.setdefault("no_robot_signals", []).append(
+            "No supported FTC/FRC telemetry signals were found in the recording."
+        )
 
     # --- per-row range checks -------------------------------------------
     for idx, row in enumerate(rows):
@@ -274,7 +305,7 @@ def validate_ftc_log(rows: list[dict[str, Any]],
             ep["flagged_samples"] += 1
 
     return {
-        "verdict": "failed" if failed else "passed",
+        "verdict": "failed" if failed else "warning" if warnings else "passed",
         "failed_checks": [
             {"name": name, "detail": "; ".join(details[:5])}
             for name, details in sorted(failed.items())

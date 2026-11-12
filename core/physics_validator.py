@@ -146,7 +146,7 @@ BOUNDS = {
         "log_mean_temperature":(0.01,50000.0),"ntu":(0.0,100.0),
     },
     SimulationType.ROBOTICS: {
-        "joint_torque":(-100000.0,100000.0),"joint_velocity":(-500.0,500.0),
+        "joint_torque":(-200.0,200.0),"joint_velocity":(-10.0,10.0),
         "joint_acceleration":(-5000.0,5000.0),"joint_position":(-4*math.pi,4*math.pi),
         "end_effector_force":(-50000.0,50000.0),"end_effector_torque":(-10000.0,10000.0),
         "end_effector_velocity":(0.0,200.0),"position_error":(0.0,500.0),

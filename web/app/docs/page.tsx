@@ -65,6 +65,28 @@ export default function DocsPage() {
           <pre className="mt-5 overflow-x-auto rounded-lg border border-white/10 p-5 font-mono text-sm leading-7">{`curl ${site.url}/api/v1/validate \\
   -H 'Content-Type: application/json' \\
   -d '{"simulation_type":"robotics","run_ai":false,"robotics_limits":{"joint_1_velocity":[-2,2]},"data":[{"time":0,"joint_1_velocity":0.5},{"time":0.1,"joint_1_velocity":0.5}]}'`}</pre>
+          <h3 className="mt-8 text-xl font-medium">Validate a recording</h3>
+          <p className="mt-4 text-base leading-7">
+            Upload a ROS 2 SQLite bag (.db3), MCAP file, LeRobot parquet file,
+            or a ZIP containing one rosbag2 bag or LeRobot dataset. Content is
+            detected from the file bytes. The upload and expanded ZIP are each
+            limited to 100 MB; converted recordings are limited to 10,000
+            samples. Install the optional <code>robotics-data</code> server
+            dependencies to enable these readers.
+          </p>
+          <pre className="mt-5 overflow-x-auto rounded-lg border border-white/10 p-5 font-mono text-sm leading-7">{`curl ${site.url}/api/v1/validate/recording \\
+  -F 'file=@run.mcap' \\
+  -F 'topic_hint=/joint_states' \\
+  -F 'robotics_limits={"joint_1_position":[-1.57,1.57]}' \\
+  -F 'conditions={}'`}</pre>
+          <p className="mt-4 text-base leading-7">
+            <code>topic_hint</code> selects matching JointState topics and
+            defaults to <code>joint_states</code>. Both <code>robotics_limits</code>
+            and <code>conditions</code> are JSON objects sent as multipart form
+            fields. The response uses the standard robotics report and adds a
+            <code> recording</code> object with the detected format, source
+            filename, and converted sample count.
+          </p>
           <p className="mt-5 text-base leading-7">
             Use <code>POST /api/v1/repair</code> with <code>data</code> to
             preview structural repairs. Set <code>apply: true</code> to receive

@@ -127,7 +127,7 @@ simapi repair run.json --apply --output run.repaired.json
 
 URDF is imported after Xacro expansion. JointState arrays use the exact joint name to create the profile’s canonical signal names; names that collide after normalization are rejected. Missing optional velocity or effort arrays stay absent. Joint header timestamps are preferred, with recording timestamps as a fallback. Numeric times are seconds. Import assigns one episode by default (`--episode` changes its ID); time resets are reported by validation rather than silently split into new episodes.
 
-A request accepts up to 10,000 samples. Recording import accepts files up to 100 MB and rejects a selected topic over the sample limit instead of truncating it. Export shorter captures or split complete episodes before submission.
+A request accepts up to 10,000 samples. Hosted recording uploads accept files up to 100 MB, expand ZIPs up to the same byte limit and 10,000 archive entries, and refuse recordings over the sample limit during conversion instead of truncating them. Export shorter captures or split complete episodes before submission.
 
 Reports add `validation_context` and `robotics_evidence`: episode ID, zero-based sample index, timestamp, signal, observed value, expected range, and check detail. Evidence details are capped at 1,000 entries with explicit `robotics_evidence_total` and `robotics_evidence_truncated` fields; verdicts and episode counts cover the full dataset.
 

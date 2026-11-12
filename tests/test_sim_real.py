@@ -66,3 +66,43 @@ def test_check_passing_only_on_one_side_is_reported_and_changes_verdict():
     assert report["sim"]["checks_passed"] == report["sim"]["checks_total"] == 1
     assert report["real"]["excluded_count"] == 1
     assert report["verdict"] == "drift_detected"
+
+
+def test_no_common_numeric_signals_is_insufficient_data_not_aligned():
+    sim = pd.DataFrame({"episode_id": ["sim"], "time": [0.0]})
+    real = pd.DataFrame({"episode_id": ["real"], "time": [0.0]})
+
+    report = compare_sim_real(sim, real)
+
+    assert report["verdict"] == "insufficient_data"
+    assert report["comparison_note"] == "No common numeric signals were available to compare."
+
+
+def test_check_warnings_remain_warnings_in_each_validation_summary():
+    data = _trajectory(1.0)
+    report = compare_sim_real(
+        data,
+        data.copy(),
+        {"checks": [{"name": "optional_signal", "status": "warning"}]},
+        {"checks": [{"name": "optional_signal", "status": "passed"}]},
+    )
+
+    assert report["sim"]["status"] == "warning"
+    assert report["real"]["status"] == "passed"
+    assert report["check_statuses"] == {
+        "optional_signal": {"sim": "warning", "real": "passed"}
+    }
+    assert report["check_pass_rates"] == {
+        "optional_signal": {"sim": False, "real": True}
+    }
+    assert report["verdict"] == "drift_detected"
+
+
+def test_info_checks_do_not_make_a_validation_summary_fail():
+    data = _trajectory(1.0)
+    report = compare_sim_real(
+        data,
+        data.copy(),
+        {"checks": [{"name": "not_evaluated", "status": "info"}]},
+    )
+    assert report["sim"]["status"] == "passed"

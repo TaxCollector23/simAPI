@@ -28,6 +28,10 @@ def validate_robotics_frame(
     excluded = {int(row): reasons for row, reasons in report["excluded"].items()}
     failures = sum(check.get("status") == "failed" for check in report["checks"])
     warnings = sum(check.get("status") == "warning" for check in report["checks"])
+    unprofiled_warning = any(
+        check.get("name") == "robotics_unprofiled_signal" and check.get("status") == "warning"
+        for check in report["checks"]
+    )
     status = "failed" if failures else "warning" if warnings or excluded else "passed"
     summary = dict(report["summary"])
     summary["time_unit"] = time_unit
@@ -46,7 +50,7 @@ def validate_robotics_frame(
                 "episode_id": str(episode_id),
                 "rows": len(episode_frame),
                 "excluded": flagged,
-                "training_ready": flagged == 0,
+                "training_ready": flagged == 0 and not unprofiled_warning,
             })
 
     return {
