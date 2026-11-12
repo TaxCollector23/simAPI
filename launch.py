@@ -14,9 +14,8 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 BANNER = """
 ╔══════════════════════════════════════════════════════════════╗
 ║  S I M A P I  —  Physics Simulation Validation              ║
-║  YC S26 Demo                                                  ║
 ╠══════════════════════════════════════════════════════════════╣
-║  Real physics validation · ML-ready output · <30ms latency  ║
+║  Local test-client clean p50: 11.74ms (100 runs)  ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 

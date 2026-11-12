@@ -1,8 +1,8 @@
 # SimAPI: Simulations you can trust
 
 Hosted validation for robotics data, joint trajectories, and Physical AI workflows. Check a
-run in the browser, from the CLI, or through an SDK. SimAPI is a service to use,
-not software you need to host.
+run in the browser, from the CLI, or through an SDK. Use the hosted service, or self-host the Python API, validation engine,
+dashboard, and MCP server included in this repository.
 
 [Open the playground](https://simapilander.vercel.app/play) · [Read the docs](https://simapilander.vercel.app/docs) · [View the source](https://github.com/TaxCollector23/simAPI)
 
@@ -37,7 +37,6 @@ engine. These are the repository destinations for its files:
 | --- | --- | --- |
 | `simapi_mcp.py` | `simapi_mcp.py` | Expose robotics validation as MCP tools for local and authenticated hosted clients. |
 | `mcp-architecture.md` | `docs/mcp-architecture.md` | Explain the MCP request path and its stdio/HTTP security boundaries. |
-| `prompts.md` | `prompts.md` | Keep the complete fix-it and architecture prompts available to contributors. |
 | `physical_ai.py` | `core/physical_ai.py` | Add episode labels, stream synchronization, action/state checks, and clean episode export. |
 | `ftc_frc.py` | `core/ftc_frc.py` | Validate FTC/FRC power, encoders, battery, heading, and odometry signals. |
 | `dashboard_extras.js` | `dashboard/dashboard_extras.js` | Add episode chips, clean CSV export, and MCP setup to the existing static dashboard. |
@@ -228,6 +227,8 @@ default. Set `SIMAPI_BASE_URL` only when you have been given another endpoint.
 
 ### Python SDK
 
+The published `simapi` package in `python-pkg/` is the canonical Python SDK.
+
 ```bash
 pip install simapi
 ```
@@ -235,9 +236,10 @@ pip install simapi
 ```python
 from simapi import SimAPI
 
-client = SimAPI()
+client = SimAPI()  # SIMAPI_BASE_URL can point to a local server.
 result = client.validate(
-    "episode.json",
+    [{"joint_1_position": 0.2, "joint_1_velocity": 0.4, "joint_1_torque": 12.0},
+     {"joint_1_position": 0.3, "joint_1_velocity": 0.5, "joint_1_torque": 14.0}],
     simulation_type="robotics",
     robotics_limits={
         "joint_1_position": (-1.57, 1.57),

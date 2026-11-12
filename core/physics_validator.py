@@ -147,9 +147,9 @@ BOUNDS = {
     },
     SimulationType.ROBOTICS: {
         "joint_torque":(-200.0,200.0),"joint_velocity":(-10.0,10.0),
-        "joint_acceleration":(-50.0,50.0),"joint_position":(-4*math.pi,4*math.pi),
-        "end_effector_force":(-1000.0,1000.0),"end_effector_torque":(-10000.0,10000.0),
-        "end_effector_velocity":(0.0,200.0),"position_error":(0.0,500.0),
+        "joint_acceleration":(-50.0,50.0),"joint_position":(-2*math.pi,2*math.pi),
+        "end_effector_force":(-1000.0,1000.0),"end_effector_torque":(-1000.0,1000.0),
+        "end_effector_velocity":(0.0,10.0),"position_error":(0.0,500.0),
         "manipulability":(0.0,500.0),"condition_number":(1.0,1e9),
         "power_consumption":(0.0,1e7),"efficiency":(0.0,1.0),
         "settling_time":(0.0,1000.0),"overshoot":(0.0,5.0),

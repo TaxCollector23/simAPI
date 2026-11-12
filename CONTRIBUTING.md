@@ -18,7 +18,7 @@ make run            # starts API + dashboard
 api/     FastAPI server, config, security, observability, error contract
 core/    Validation engine: ingestion, physics rules, AI reasoning layer
 integrations/  Optional robotics data adapters (ROS 2 rosbag2, LeRobot parquet)
-sdk/     Python client SDK
+python-pkg/  Canonical published Python SDK
 tests/   Pytest suite (unit + API contract)
 dashboard/  Static demo dashboard
 ```

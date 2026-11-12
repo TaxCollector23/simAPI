@@ -23,10 +23,10 @@ DEFAULT_ROBOTICS_LIMITS: dict[str, tuple[float, float]] = {
     "joint_torque": (-200.0, 200.0),
     "joint_velocity": (-10.0, 10.0),
     "joint_acceleration": (-50.0, 50.0),
-    "joint_position": (-4 * 3.141592653589793, 4 * 3.141592653589793),
+    "joint_position": (-2 * 3.141592653589793, 2 * 3.141592653589793),
     "end_effector_force": (-1_000.0, 1_000.0),
-    "end_effector_torque": (-10_000.0, 10_000.0),
-    "end_effector_velocity": (0.0, 200.0),
+    "end_effector_torque": (-1_000.0, 1_000.0),
+    "end_effector_velocity": (0.0, 10.0),
     "position_error": (0.0, 500.0),
     "manipulability": (0.0, 500.0),
     "condition_number": (1.0, 1e9),
@@ -137,7 +137,19 @@ class TrajectorySuite:
     name = "trajectory"
 
     def run(self, context: RoboticsValidationContext) -> RoboticsSuiteResult:
-        result = analyze_trajectories(context.source_rows, context.configured_limits, context.conditions)
+        # Unprofiled runs still need temporal screening. Explicit profiles keep
+        # their existing bounds and opt-in consistency tolerances.
+        bounds = dict(context.configured_limits or context.limits)
+        conditions = context.conditions
+        if not context.configured_limits:
+            for column in context.data.columns:
+                signal = normalize(str(column))
+                for source, target in (("position", "velocity"), ("velocity", "acceleration")):
+                    if signal.startswith("joint") and signal.endswith("_" + source):
+                        bounds[signal[:-len(source)] + target] = DEFAULT_ROBOTICS_LIMITS["joint_" + target]
+            conditions = {"max_time_step": 0.5, "velocity_tolerance": 1.0,
+                          "acceleration_tolerance": 10.0, **conditions}
+        result = analyze_trajectories(context.source_rows, bounds, conditions)
         return RoboticsSuiteResult(
             checks=result["checks"],
             excluded=result["excluded"],

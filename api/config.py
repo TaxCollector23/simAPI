@@ -86,7 +86,7 @@ class Settings:
     max_jobs: int = _env_int("SIMAPI_MAX_JOBS", 10_000)
 
     # ── Payload limits ───────────────────────────────────────────────────────────
-    max_rows: int = _env_int("SIMAPI_MAX_ROWS", 1_000_000)
+    max_rows: int = _env_int("SIMAPI_MAX_ROWS", 10_000)
     max_upload_bytes: int = _env_int("SIMAPI_MAX_UPLOAD_BYTES", 100 * 1024 * 1024)
     max_recording_rows: int = _env_int("SIMAPI_MAX_RECORDING_ROWS", 10_000)
     max_recording_zip_entries: int = _env_int("SIMAPI_MAX_RECORDING_ZIP_ENTRIES", 10_000)
