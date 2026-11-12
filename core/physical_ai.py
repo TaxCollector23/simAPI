@@ -61,10 +61,13 @@ FAILURE_LABELS = (
     "time_gap",              # silent hole in the timestamps
     "time_disorder",         # time went backwards / repeated
     "inconsistent_velocity", # recorded velocity disagrees with the positions
+    "kinematics_mismatch",   # reported end-effector position disagrees with URDF FK
+    "kinematics_unavailable", # requested FK comparison could not evaluate every sample
 )
 
 EPISODE_KEYS = ("episode_id", "episode", "trajectory_id", "sequence_id")
 TIME_KEYS = ("time", "t", "timestamp", "simulation_time", "sim_time", "elapsed_time")
+MAX_STREAM_SYNC_SAMPLES = 1_000_000
 
 
 # --------------------------------------------------------------------------
@@ -72,10 +75,22 @@ TIME_KEYS = ("time", "t", "timestamp", "simulation_time", "sim_time", "elapsed_t
 # --------------------------------------------------------------------------
 
 def _episode_key_name(rows: list[dict[str, Any]]) -> str | None:
+    normalized_keys = {
+        str(key).strip().lower().replace("-", "_").replace(" ", "_")
+        for row in rows for key in row
+    }
     for key in EPISODE_KEYS:
-        if any(key in row for row in rows):
+        if key in normalized_keys:
             return key
     return None
+
+
+def _episode_value(row: dict[str, Any], key: str, default: Any = None) -> Any:
+    for source_key, value in row.items():
+        normalized = str(source_key).strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized == key:
+            return value
+    return default
 
 
 def _group_episodes(rows: list[dict[str, Any]]):
@@ -84,7 +99,7 @@ def _group_episodes(rows: list[dict[str, Any]]):
     groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     order: list[str] = []
     for idx, row in enumerate(rows):
-        name = str(row.get(key, "(missing episode)")) if key else "Episode 1"
+        name = str(_episode_value(row, key, "(missing episode)")) if key else "Episode 1"
         if name not in groups:
             groups[name] = []
             order.append(name)
@@ -352,8 +367,15 @@ def check_stream_sync(streams: dict[str, list[float]],
 
     names = list(cleaned)
     if len(names) < 2:
-        return {"verdict": "passed", "in_sync": True, "streams": {},
+        return {"verdict": "insufficient_data", "in_sync": False, "streams": {},
                 "detail": "Need at least two streams to compare."}
+    if len(names) > 32:
+        raise ValueError("At most 32 streams can be synchronized in one request")
+    sample_count = sum(len(values) for values in cleaned.values())
+    if sample_count > MAX_STREAM_SYNC_SAMPLES:
+        raise ValueError(
+            f"Stream synchronization is limited to {MAX_STREAM_SYNC_SAMPLES} timestamps per request"
+        )
     reference_name = names[0]
     reference = cleaned[reference_name]
     compared: dict[str, Any] = {}
@@ -481,7 +503,7 @@ def export_clean_dataset(rows: list[dict[str, Any]],
     key = _episode_key_name(rows)
     clean_rows = [
         row for row in rows
-        if (str(row.get(key, "(missing episode)")) if key else "Episode 1") not in bad_ids
+        if (str(_episode_value(row, key, "(missing episode)")) if key else "Episode 1") not in bad_ids
     ]
     report = {
         "kept_episodes": [e["episode_id"] for e in quality["episodes"]

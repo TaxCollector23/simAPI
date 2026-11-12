@@ -112,10 +112,20 @@ def test_kinematics_uses_full_position_column_alias_and_skips_missing_hand_data(
     assert check["status"] == "passed"
     assert check["indices"] == []
     assert check["violations"] == 0
-    assert report["excluded"] == {}
+    coverage = next(c for c in report["checks"] if c["name"] == "robotics_kinematics:coverage")
+    assert coverage["status"] == "warning"
+    assert coverage["indices"] == [1]
+    assert report["excluded"][1][0].startswith("URDF FK could not run")
+    assert report["summary"]["kinematics"] == {
+        "evaluated_rows": 1,
+        "skipped_rows": 1,
+        "total_rows": 2,
+        "coverage": 0.5,
+        "tolerance_m": 0.01,
+    }
 
 
-def test_missing_hand_columns_skip_kinematics_without_a_new_check():
+def test_missing_hand_columns_warn_and_exclude_unchecked_rows():
     rows = [{"joint_shoulder_position": 0.0, "joint_elbow_position": 0.0}]
     baseline = RoboticsValidationEngine().validate(pd.DataFrame(rows), source_rows=rows)
     with_optional_suite = RoboticsValidationEngine().validate(
@@ -124,7 +134,12 @@ def test_missing_hand_columns_skip_kinematics_without_a_new_check():
         additional_suites=[KinematicsSuite(TWO_LINK_URDF, _signals())],
     )
 
-    assert with_optional_suite == baseline
+    assert with_optional_suite != baseline
+    coverage = next(c for c in with_optional_suite["checks"] if c["name"] == "robotics_kinematics:coverage")
+    assert coverage["status"] == "warning"
+    assert coverage["indices"] == [0]
+    assert with_optional_suite["summary"]["kinematics"]["coverage"] == 0.0
+    assert 0 in with_optional_suite["excluded"]
 
 
 def test_default_engine_output_is_unchanged_with_empty_optional_suites():
@@ -150,3 +165,30 @@ def test_parser_requires_an_unambiguous_chain_or_explicit_links():
     geometry = parse_urdf_geometry(branched, base_link="base", tip_link="left")
     assert geometry.tip_link == "left"
     assert forward_kinematics(geometry, {}) == pytest.approx((0.0, 0.0, 0.0))
+
+
+def test_parser_rejects_multi_parent_graphs_and_entity_declarations():
+    multi_parent = """<robot name="multi_parent">
+      <link name="base"/><link name="left"/><link name="right"/><link name="tip"/>
+      <joint name="left_joint" type="fixed"><parent link="base"/><child link="left"/></joint>
+      <joint name="right_joint" type="fixed"><parent link="base"/><child link="right"/></joint>
+      <joint name="left_tip" type="fixed"><parent link="left"/><child link="tip"/></joint>
+      <joint name="right_tip" type="fixed"><parent link="right"/><child link="tip"/></joint>
+    </robot>"""
+    entity_xml = """<!DOCTYPE robot [<!ENTITY name "unsafe">]>
+    <robot name="&name;"><link name="base"/></robot>"""
+
+    with pytest.raises(ValueError, match="more than one parent joint"):
+        parse_urdf_geometry(multi_parent)
+    with pytest.raises(ValueError, match="DTD and entity declarations"):
+        parse_urdf_geometry(entity_xml)
+
+
+def test_kinematics_suite_enforces_evaluation_cap():
+    rows = [{"joint_shoulder_position": 0.0}, {"joint_shoulder_position": 0.1}]
+    suite = KinematicsSuite(TWO_LINK_URDF, _signals(), max_evaluations=1)
+
+    with pytest.raises(ValueError, match="limited to 1 sample"):
+        RoboticsValidationEngine().validate(
+            pd.DataFrame(rows), source_rows=rows, additional_suites=[suite]
+        )

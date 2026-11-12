@@ -159,6 +159,7 @@ class KinematicsSuite:
         urdf_geometry: URDFGeometry | str,
         joint_signal_map: dict[str, str] | None = None,
         tolerance_m: float = 0.01,
+        max_evaluations: int = 10_000,
     ) -> None:
         if isinstance(urdf_geometry, str):
             urdf_geometry = parse_urdf_geometry(urdf_geometry)
@@ -166,39 +167,55 @@ class KinematicsSuite:
             raise TypeError("urdf_geometry must be URDFGeometry or URDF XML text")
         if not math.isfinite(tolerance_m) or tolerance_m < 0:
             raise ValueError("tolerance_m must be finite and non-negative")
+        if isinstance(max_evaluations, bool) or not isinstance(max_evaluations, int) or max_evaluations < 1:
+            raise ValueError("max_evaluations must be a positive integer")
         self.urdf_geometry = urdf_geometry
         self.joint_signal_map = {
             str(joint): normalize(str(signal)) for joint, signal in (joint_signal_map or {}).items()
         }
         self.tolerance_m = float(tolerance_m)
+        self.max_evaluations = max_evaluations
 
     def run(self, context: RoboticsValidationContext) -> RoboticsSuiteResult:
         columns = {normalize(str(column)) for column in context.data.columns}
+        rows = [{normalize(str(key)): value for key, value in row.items()} for row in context.source_rows]
+        if len(rows) > self.max_evaluations:
+            raise ValueError(
+                f"URDF FK evaluation is limited to {self.max_evaluations} sample(s); received {len(rows)}."
+            )
         endpoint_columns = next(
             (signals for signals in self._END_EFFECTOR_COLUMNS if set(signals).issubset(columns)),
             None,
         )
-        if endpoint_columns is None or not self.urdf_geometry.active_joints:
-            return RoboticsSuiteResult()
-
         joint_signals = {
             joint.name: self.joint_signal_map.get(joint.name, normalize(joint_signal_name(joint.name)))
             for joint in self.urdf_geometry.active_joints
         }
         required_signals = set(joint_signals.values())
-        if not required_signals.issubset(columns):
-            return RoboticsSuiteResult()
-
         time_key = next((key for key in TIME_KEYS if key in columns), None)
         group_key = next((key for key in GROUP_KEYS if key in columns), None)
         checks: list[dict[str, Any]] = []
         excluded: dict[int, list[str]] = {}
         evidence: list[dict[str, Any]] = []
         failed_indices: list[int] = []
+        skipped_reasons: dict[int, str] = {}
         evaluated = 0
-        rows = [{normalize(str(key)): value for key, value in row.items()} for row in context.source_rows]
 
-        for index, row in enumerate(rows):
+        if endpoint_columns is None:
+            skipped_reasons = {
+                index: "URDF FK could not run because reported end-effector x, y, and z signals are missing."
+                for index in range(len(rows))
+            }
+        elif not required_signals.issubset(columns):
+            missing_signals = sorted(required_signals.difference(columns))
+            reason = (
+                "URDF FK could not run because joint position signals are missing: "
+                + ", ".join(missing_signals)
+                + "."
+            )
+            skipped_reasons = {index: reason for index in range(len(rows))}
+
+        for index, row in enumerate(rows) if endpoint_columns is not None and required_signals.issubset(columns) else ():
             joint_values: dict[str, float] = {}
             missing = False
             for _joint_name, signal in joint_signals.items():
@@ -208,7 +225,11 @@ class KinematicsSuite:
                     break
                 joint_values[signal] = value
             reported_values = [number(row.get(signal)) for signal in endpoint_columns]
-            if missing or any(value is None for value in reported_values):
+            if missing:
+                skipped_reasons[index] = "URDF FK could not run because a joint position is missing or non-finite."
+                continue
+            if any(value is None for value in reported_values):
+                skipped_reasons[index] = "URDF FK could not run because reported end-effector x, y, or z is missing or non-finite."
                 continue
             computed = forward_kinematics(self.urdf_geometry, joint_values, joint_signals)
             reported = tuple(float(value) for value in reported_values if value is not None)
@@ -240,8 +261,31 @@ class KinematicsSuite:
                 "distance_m": distance,
             })
 
+        for index, reason in skipped_reasons.items():
+            excluded[index] = [reason]
+        summary = {
+            "kinematics": {
+                "evaluated_rows": evaluated,
+                "skipped_rows": len(skipped_reasons),
+                "total_rows": len(rows),
+                "coverage": evaluated / len(rows) if rows else 0.0,
+                "tolerance_m": self.tolerance_m,
+            }
+        }
+        if skipped_reasons:
+            checks.append({
+                "name": "robotics_kinematics:coverage",
+                "column": "end_effector_position",
+                "status": "warning",
+                "indices": sorted(skipped_reasons),
+                "violations": len(skipped_reasons),
+                "detail": (
+                    f"URDF FK evaluated {evaluated} of {len(rows)} sample(s); "
+                    f"{len(skipped_reasons)} sample(s) could not be evaluated."
+                ),
+            })
         if not evaluated:
-            return RoboticsSuiteResult()
+            return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary)
         count_failed = len(failed_indices)
         status = "failed" if count_failed else "passed"
         detail = (
@@ -259,7 +303,7 @@ class KinematicsSuite:
             "violations": count_failed,
             "detail": detail,
         })
-        return RoboticsSuiteResult(checks=checks, excluded=excluded, evidence=evidence)
+        return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary, evidence=evidence)
 
 
 class RoboticsValidationEngine:

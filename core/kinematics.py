@@ -17,6 +17,9 @@ from dataclasses import dataclass
 import numpy as np
 
 SUPPORTED_JOINT_TYPES = {"fixed", "revolute", "continuous", "prismatic"}
+MAX_URDF_XML_BYTES = 2 * 1024 * 1024
+MAX_URDF_LINKS = 10_000
+MAX_URDF_JOINTS = 10_000
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,10 @@ def parse_urdf_geometry(
     """
     if not isinstance(urdf_xml, str) or not urdf_xml.strip():
         raise ValueError("urdf_xml must be a non-empty XML string")
+    if len(urdf_xml.encode("utf-8")) > MAX_URDF_XML_BYTES:
+        raise ValueError(f"urdf_xml exceeds the {MAX_URDF_XML_BYTES}-byte parser limit")
+    if "<!DOCTYPE" in urdf_xml.upper() or "<!ENTITY" in urdf_xml.upper():
+        raise ValueError("URDF DTD and entity declarations are not supported")
     try:
         root = ET.fromstring(urdf_xml)
     except ET.ParseError as exc:
@@ -78,11 +85,17 @@ def parse_urdf_geometry(
     if root.tag != "robot":
         raise ValueError("URDF root element must be <robot>")
 
-    links = {element.get("name", "").strip() for element in root.findall("link")}
+    link_names = [element.get("name", "").strip() for element in root.findall("link")]
+    links = set(link_names)
     if "" in links or not links:
         raise ValueError("URDF must declare named links")
+    if len(link_names) != len(links):
+        raise ValueError("URDF link names must be unique")
+    if len(links) > MAX_URDF_LINKS:
+        raise ValueError(f"URDF exceeds the {MAX_URDF_LINKS}-link parser limit")
     joints: list[URDFJoint] = []
     seen_joint_names: set[str] = set()
+    seen_child_links: set[str] = set()
     for element in root.findall("joint"):
         name = (element.get("name") or "").strip()
         kind = (element.get("type") or "").strip().lower()
@@ -96,7 +109,14 @@ def parse_urdf_geometry(
             raise ValueError(f"URDF joint '{name}' has unsupported type '{kind}'")
         if parent_link not in links or child_link not in links:
             raise ValueError(f"URDF joint '{name}' references an undeclared parent or child link")
+        if child_link in seen_child_links:
+            raise ValueError(
+                f"URDF link '{child_link}' has more than one parent joint; links must form a tree"
+            )
+        if len(joints) >= MAX_URDF_JOINTS:
+            raise ValueError(f"URDF exceeds the {MAX_URDF_JOINTS}-joint parser limit")
         seen_joint_names.add(name)
+        seen_child_links.add(child_link)
         origin = element.find("origin")
         xyz = _vector(origin.get("xyz") if origin is not None else None, (0.0, 0.0, 0.0), field=f"{name}.origin.xyz")
         rpy = _vector(origin.get("rpy") if origin is not None else None, (0.0, 0.0, 0.0), field=f"{name}.origin.rpy")
@@ -133,6 +153,8 @@ def parse_urdf_geometry(
         link, path, visited_on_path = queue.popleft()
         if link == tip_link:
             paths.append(path)
+            if len(paths) > 1:
+                raise ValueError(f"More than one URDF joint chain connects '{base_link}' to '{tip_link}'")
             continue
         for joint in adjacency.get(link, []):
             if joint.child_link in visited_on_path:

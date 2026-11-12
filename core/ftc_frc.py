@@ -175,6 +175,15 @@ def validate_ftc_log(rows: list[dict[str, Any]],
     heading_cols = [c for c in columns
                     if c == "heading_deg" or c.endswith("_heading_deg")]
     voltage_col = next((c for c in columns if "battery" in c or c == "voltage"), None)
+    numeric_signal_cols = set(power_cols + heading_cols)
+    numeric_signal_cols.update(
+        col for col in columns
+        if col.endswith(("_position", "_encoder", "_velocity")) or col in {"x", "y"}
+    )
+    if voltage_col:
+        numeric_signal_cols.add(voltage_col)
+    if time_key in columns:
+        numeric_signal_cols.add(time_key)
 
     has_valid_time = any(_num(row.get(time_key)) is not None for row in rows)
     if not has_valid_time:
@@ -198,6 +207,24 @@ def validate_ftc_log(rows: list[dict[str, Any]],
 
     # --- per-row range checks -------------------------------------------
     for idx, row in enumerate(rows):
+        for col in sorted(numeric_signal_cols):
+            if col not in row:
+                fail(
+                    "invalid_numeric_signal",
+                    idx,
+                    f"row {idx}: {col} is missing",
+                    f"{col} is missing or non-finite/non-numeric",
+                )
+                continue
+            raw = row[col]
+            value = _num(raw)
+            if raw is None or value is None:
+                fail(
+                    "invalid_numeric_signal",
+                    idx,
+                    f"row {idx}: {col} must contain a finite numeric value; got {raw!r}",
+                    f"{col} is missing or non-finite/non-numeric",
+                )
         for col in power_cols:
             v = _num(row.get(col))
             if v is not None and not (power_lo <= v <= power_hi):
