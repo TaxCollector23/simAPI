@@ -91,6 +91,8 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .hero-description { max-width: 480px; margin: 28px 0 0; color: var(--ink-secondary); font-size: 19px; line-height: 1.55; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .landing-button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; border-radius: 7px; font-size: 15px; font-weight: 500; transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease; }
+.hero-actions { gap: 8px; }
+.landing-button-claude { gap: 6px; padding-inline: 12px; font-size: 14px; }
 .landing-button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 .landing-button-primary { background: var(--ink); color: var(--paper); }
 .landing-button-primary:hover { background: #3a3a32; }
@@ -256,6 +258,8 @@ body:has(.site-page) { background: #f6f3ec; color: #24241f; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.site-page .claude-step-number { color: #fff !important; background: #24241f !important; }
 
 /* Robotics workbench: shared paper surfaces, readable controls, data-led charts. */
 .robotics-workspace { max-width: 1240px; margin-inline: auto; }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
+import { ClaudeSpark } from "./claude-spark";
 
 export function Cta() {
   return (
@@ -15,6 +16,7 @@ export function Cta() {
         <div className="flex flex-wrap gap-3">
           <Link href="/play" className="landing-button landing-button-primary">Validate a run <ArrowUpRight size={17} strokeWidth={1.7} /></Link>
           <Link href="/docs" className="landing-button landing-button-secondary">Read the workflow docs</Link>
+          <Link href="/connect/claude" className="landing-button landing-button-primary landing-button-claude"><ClaudeSpark /> Use in Claude <ArrowUpRight size={17} strokeWidth={1.7} /></Link>
         </div>
       </div>
     </section>
