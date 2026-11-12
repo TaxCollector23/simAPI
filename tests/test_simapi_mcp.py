@@ -95,6 +95,19 @@ def test_http_mode_requires_keys_at_startup(monkeypatch):
         server.build_http_app()
 
 
+def test_http_healthz_is_public_but_mcp_requires_auth():
+    app = server.build_http_app(api_keys=["health-token"])
+    client = TestClient(app)
+    health = client.get("/healthz")
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+
+    protected = client.post("/mcp", headers=_headers(), json={})
+    assert protected.status_code == 401
+    assert protected.json() == {"error": "Unauthorized"}
+    client.close()
+
+
 def test_http_authenticated_tools_and_recording_upload():
     app = server.build_http_app(api_keys=["good-token"])
     with TestClient(app) as client:

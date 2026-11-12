@@ -644,6 +644,10 @@ class MCPHTTPAuthRateLimit:
             await self.app(scope, receive, send)
             return
 
+        if scope.get("method") == "GET" and scope.get("path") == "/healthz":
+            await self._respond(send, 200, {"status": "ok"})
+            return
+
         authorization = [
             value for name, value in scope.get("headers", [])
             if name.lower() == b"authorization"

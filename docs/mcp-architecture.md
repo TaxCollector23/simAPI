@@ -89,10 +89,12 @@ process.
 ### Streamable HTTP
 
 HTTP mode is for a remote client behind HTTPS. SimAPI refuses to start unless
-`SIMAPI_MCP_API_KEYS` contains at least one bearer token. The ASGI wrapper
-checks every HTTP request before it reaches the MCP application. It compares
-tokens with `hmac.compare_digest`, stores only a SHA-256 token digest for rate
-accounting, and returns 401 for missing or invalid credentials.
+`SIMAPI_MCP_API_KEYS` contains at least one bearer token. The public
+`GET /healthz` route returns a fixed liveness status for Render and exposes no
+runtime details. All other HTTP requests are checked before they reach the MCP
+application. The wrapper compares tokens with `hmac.compare_digest`, stores
+only a SHA-256 token digest for rate accounting, and returns 401 for missing or
+invalid credentials.
 
 Each token has a fixed 60-second request window controlled by
 `SIMAPI_MCP_RATE_LIMIT` (default 60). Requests past the limit receive 429 and a
