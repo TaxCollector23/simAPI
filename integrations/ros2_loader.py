@@ -10,13 +10,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from core.kinematics import normalize_joint_name
 from integrations.recording_limits import RecordingSampleLimitExceeded
 from integrations.robotics_validation import validate_robotics_frame
 
@@ -32,14 +32,10 @@ def _rosbags_type_name(msgtype: str) -> str:
 
 def _joint_stem(name: str) -> str:
     """Map a ROS joint name to a stable, collision-checkable signal prefix."""
-    clean = str(name).strip()
-    numeric = re.fullmatch(r"(?:joint[_-]?)?(\d+)", clean, flags=re.IGNORECASE)
-    if numeric:
-        return f"joint_{int(numeric.group(1))}"
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", clean).strip("_").lower()
-    if not slug:
-        raise ValueError("JointState contains an empty or invalid joint name")
-    return f"joint_{slug}"
+    try:
+        return normalize_joint_name(str(name))
+    except ValueError as exc:
+        raise ValueError("JointState contains an empty or invalid joint name") from exc
 
 
 def _field_values(msg: Any, field: str, names: list[str]) -> list[Any]:
