@@ -1626,6 +1626,7 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
             "severity": "critical",
         })
         seen.add(row)
+    result["excluded_indices"] = sorted(seen)
     result["trials_excluded"] = len(seen)
     result["trials_valid"] = max(0, result["trials_submitted"] - len(seen))
     result["exclusion_rate"] = round(len(seen) / result["trials_submitted"], 4) if result["trials_submitted"] else 0.0
@@ -2004,7 +2005,12 @@ async def validate_upload(
     run_ai: str = Form("true"),
     _: str = Depends(caller_identity),
 ):
-    contents = await file.read()
+    try:
+        contents = await file.read()
+    except OSError as exc:
+        raise SimAPIError("Could not read the upload.", code=ErrorCode.BAD_REQUEST) from exc
+    if not contents.strip():
+        raise SimAPIError("Upload is empty.", code=ErrorCode.BAD_REQUEST)
     if len(contents) > settings.max_upload_bytes:
         raise PayloadTooLargeError(
             f"Upload exceeds the maximum of {settings.max_upload_bytes} bytes.",
@@ -2022,17 +2028,33 @@ async def validate_upload(
             code=ErrorCode.UNSUPPORTED_FORMAT,
             details={"allowed": [s.value for s in SimulationType]},
         ) from e
-    df, _meta = ingester.ingest(
-        contents,
-        filename=file.filename,
-        robotics_mode=sim == SimulationType.ROBOTICS,
-    )
+    try:
+        if Path(file.filename or "upload.csv").suffix.lower() in {".csv", ".json", ".yaml", ".yml", ".toml", ".txt", ".md"}:
+            contents.decode("utf-8-sig")
+        df, _meta = ingester.ingest(
+            contents,
+            filename=file.filename,
+            robotics_mode=sim == SimulationType.ROBOTICS,
+        )
+    except (ValueError, TypeError, OSError, EOFError) as exc:
+        raise SimAPIError("Upload could not be parsed as a supported data file.", code=ErrorCode.BAD_REQUEST) from exc
     if sim == SimulationType.ROBOTICS and _meta.get("invalid_numeric_columns"):
         raise SimAPIError(
             "Robotics signal columns must contain at least one numeric sample.",
             code=ErrorCode.BAD_REQUEST,
             details={"columns": _meta["invalid_numeric_columns"]},
         )
+    measurement_columns = [
+        column for column in df.columns
+        if normalize_robotics_signal(str(column)) not in {
+            "time", "t", "timestamp", "stamp", "episode_id", "episode", "trajectory_id",
+            "sequence_id", "frame_index", "index",
+        }
+    ]
+    if df.empty or not measurement_columns or not np.isfinite(
+        df[measurement_columns].to_numpy(dtype=float)
+    ).any():
+        raise SimAPIError("Upload contains no usable numeric measurement rows.", code=ErrorCode.BAD_REQUEST)
     req = ValidateRequest(
         data=df.to_dict(orient="records"),
         simulation_type=sim,

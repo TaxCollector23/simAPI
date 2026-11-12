@@ -18,7 +18,7 @@ import pandas as pd
 
 from core.kinematics import normalize_joint_name
 from integrations.recording_limits import RecordingSampleLimitExceeded
-from integrations.robotics_validation import validate_robotics_frame
+from integrations.robotics_validation import load_limits_profile, validate_robotics_frame
 
 _JOINT_STATE_TYPES = {"sensor_msgs/msg/JointState", "sensor_msgs/JointState"}
 
@@ -182,9 +182,14 @@ def _cli(argv: list[str]) -> int:
     parser.add_argument("--episode-every-s", type=float, default=None)
     parser.add_argument("--out", default="", help="Write normalized robot rows to CSV")
     parser.add_argument("--report", default="")
+    parser.add_argument("--profile", help="Limits JSON file in API robotics_limits format")
     args = parser.parse_args(argv)
+    try:
+        limits = load_limits_profile(args.profile)
+    except (OSError, ValueError) as exc:
+        parser.error(f"Invalid --profile: {exc}")
     frame = load_rosbag2(args.bag, topic_hint=args.topic_hint, episode_every_s=args.episode_every_s)
-    report = validate_robotics_frame(frame)
+    report = validate_robotics_frame(frame, limits=limits)
     report.update({"source": str(args.bag), "format": "rosbag2"})
     if args.out:
         frame.to_csv(args.out, index=False)
