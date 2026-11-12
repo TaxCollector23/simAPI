@@ -20,10 +20,14 @@ import json
 import math
 import os
 import re
+import stat
 import sys
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -32,7 +36,7 @@ from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -1123,6 +1127,226 @@ async def prometheus_metrics() -> str:
     return metrics.render()
 
 
+def _recording_source_name(filename: str | None) -> str:
+    """Return a display-only basename for untrusted client upload names."""
+    return (filename or "recording").replace("\\", "/").rsplit("/", 1)[-1] or "recording"
+
+
+async def _stream_recording_upload(file: UploadFile, destination: Path, max_bytes: int) -> tuple[bytes, int]:
+    """Copy an UploadFile to disk in bounded chunks and enforce the cap while reading."""
+    total = 0
+    prefix = bytearray()
+    with destination.open("wb") as output:
+        while chunk := await file.read(64 * 1024):
+            total += len(chunk)
+            if total > max_bytes:
+                raise PayloadTooLargeError(
+                    f"Recording upload exceeds the maximum of {max_bytes} bytes.",
+                    details={"bytes": total, "limit": max_bytes},
+                )
+            if len(prefix) < 16:
+                prefix.extend(chunk[: 16 - len(prefix)])
+            output.write(chunk)
+    return bytes(prefix), total
+
+
+def _safe_zip_destination(root: Path, name: str) -> Path:
+    if not name or "\x00" in name:
+        raise ValueError("ZIP recording contains an invalid path.")
+    posix = PurePosixPath(name)
+    windows = PureWindowsPath(name)
+    parts = tuple(part for part in posix.parts if part not in ("", "."))
+    if (
+        posix.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or any(part == ".." for part in parts)
+        or any(part == ".." for part in windows.parts)
+    ):
+        raise ValueError("ZIP recording contains a path that escapes its upload directory.")
+    if not parts:
+        return root
+    destination = root.joinpath(*parts)
+    if not destination.resolve().is_relative_to(root.resolve()):
+        raise ValueError("ZIP recording contains a path that escapes its upload directory.")
+    return destination
+
+
+def _extract_recording_zip(archive_path: Path, destination: Path, max_bytes: int) -> tuple[str, Path]:
+    """Extract a bounded ZIP without following links or accepting path traversal."""
+    destination.mkdir(parents=True, exist_ok=True)
+    total_size = 0
+    written_paths: set[Path] = set()
+    try:
+        with zipfile.ZipFile(archive_path) as bundle:
+            for info in bundle.infolist():
+                target = _safe_zip_destination(destination, info.filename)
+                if target == destination and not info.is_dir():
+                    raise ValueError("ZIP recording contains an empty file path.")
+                mode = info.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise ValueError("ZIP recording cannot contain symbolic links.")
+                if target in written_paths:
+                    raise ValueError("ZIP recording contains duplicate file paths.")
+                written_paths.add(target)
+                if info.file_size > max_bytes or total_size + info.file_size > max_bytes:
+                    raise PayloadTooLargeError(
+                        f"Expanded recording ZIP exceeds the maximum of {max_bytes} bytes.",
+                        details={"expanded_bytes": total_size + info.file_size, "limit": max_bytes},
+                    )
+                if info.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(info) as source, target.open("xb") as output:
+                    while chunk := source.read(64 * 1024):
+                        total_size += len(chunk)
+                        if total_size > max_bytes:
+                            raise PayloadTooLargeError(
+                                f"Expanded recording ZIP exceeds the maximum of {max_bytes} bytes.",
+                                details={"expanded_bytes": total_size, "limit": max_bytes},
+                            )
+                        output.write(chunk)
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Upload starts with ZIP bytes but is not a valid ZIP archive.") from exc
+
+    # A rosbag2 ZIP must expose one bag directory; a LeRobot ZIP may have
+    # multiple parquet shards anywhere below its dataset root.
+    bag_directories: set[Path] = set()
+    sqlite_files: list[Path] = []
+    mcap_files: list[Path] = []
+    parquet_files: list[Path] = []
+    for child in destination.rglob("*"):
+        if not child.is_file():
+            continue
+        try:
+            with child.open("rb") as stream:
+                signature = stream.read(16)
+        except OSError:
+            continue
+        if signature.startswith(b"SQLite format 3\x00"):
+            sqlite_files.append(child)
+        elif signature.startswith(b"\x89MCAP0\r\n"):
+            mcap_files.append(child)
+        elif signature.startswith(b"PAR1"):
+            parquet_files.append(child)
+        if child.name.lower() == "metadata.yaml":
+            bag_directories.add(child.parent)
+
+    rosbag_paths = [
+        parent for parent in bag_directories
+        if any(path.parent == parent for path in sqlite_files + mcap_files)
+    ]
+    has_rosbag = bool(rosbag_paths) or (len(sqlite_files) == 1 and not parquet_files)
+    has_mcap = len(mcap_files) == 1 and not parquet_files and not has_rosbag
+    has_lerobot = bool(parquet_files) and not has_rosbag and not mcap_files
+    if sum((has_rosbag, has_mcap, has_lerobot)) != 1:
+        raise ValueError(
+            "ZIP must contain one rosbag2 bag, one MCAP recording, or a LeRobot parquet dataset."
+        )
+    if has_rosbag:
+        if rosbag_paths:
+            if len(rosbag_paths) != 1:
+                raise ValueError("ZIP contains multiple rosbag2 bag directories; upload one recording at a time.")
+            return "rosbag2", rosbag_paths[0]
+        return "rosbag2", sqlite_files[0]
+    if has_mcap:
+        return "mcap", mcap_files[0]
+    return "lerobot", destination
+
+
+def _recording_file_kind(path: Path, prefix: bytes, expanded_dir: Path, max_bytes: int) -> tuple[str, Path]:
+    if prefix.startswith(b"PAR1"):
+        return "lerobot", path
+    if prefix.startswith(b"SQLite format 3\x00"):
+        return "rosbag2", path
+    if prefix.startswith(b"\x89MCAP0\r\n"):
+        return "mcap", path
+    if prefix.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
+        return _extract_recording_zip(path, expanded_dir, max_bytes)
+    raise SimAPIError(
+        "Unsupported recording content. Upload a ROS 2 .db3/.mcap recording, a rosbag2 ZIP, or a LeRobot .parquet/ZIP.",
+        code=ErrorCode.UNSUPPORTED_FORMAT,
+        status_code=415,
+        details={"supported": ["rosbag2 .db3", "rosbag2 ZIP", "MCAP", "LeRobot parquet", "LeRobot ZIP"]},
+    )
+
+
+async def _load_recording_upload(
+    file: UploadFile,
+    *,
+    topic_hint: str,
+) -> tuple[list[dict[str, Any]], str, int]:
+    """Load and convert an upload once; all temporary bytes disappear before validation."""
+    with tempfile.TemporaryDirectory(prefix="simapi-recording-") as temp_name:
+        temp_dir = Path(temp_name)
+        raw_path = temp_dir / "upload.bin"
+        prefix, _bytes = await _stream_recording_upload(file, raw_path, settings.max_upload_bytes)
+        expanded_dir = temp_dir / "expanded"
+        try:
+            recording_format, source_path = _recording_file_kind(
+                raw_path, prefix, expanded_dir, settings.max_upload_bytes
+            )
+            # Reader plugins dispatch standalone files by their storage suffix.
+            # Assign the suffix from the detected content, never from the
+            # client-provided filename, so arbitrary upload names still work.
+            if source_path == raw_path:
+                suffix = {"rosbag2": ".db3", "mcap": ".mcap", "lerobot": ".parquet"}[recording_format]
+                typed_path = temp_dir / f"upload{suffix}"
+                raw_path.replace(typed_path)
+                source_path = typed_path
+            if recording_format == "lerobot":
+                from integrations.lerobot_loader import load_lerobot
+
+                frame = load_lerobot(source_path)
+            else:
+                from integrations.ros2_loader import load_rosbag2
+
+                frame = load_rosbag2(source_path, topic_hint=topic_hint)
+        except SimAPIError:
+            raise
+        except RuntimeError as exc:
+            message = str(exc)
+            if "optional" in message.lower() or "requires" in message.lower():
+                raise SimAPIError(
+                    f"{message}. Install the optional robotics data dependencies with `pip install -e '.[robotics-data]'`.",
+                    code=ErrorCode.UNSUPPORTED_FORMAT,
+                    status_code=501,
+                ) from exc
+            raise SimAPIError(message, code=ErrorCode.BAD_REQUEST) from exc
+        except (ValueError, FileNotFoundError, zipfile.BadZipFile) as exc:
+            raise SimAPIError(str(exc), code=ErrorCode.BAD_REQUEST) from exc
+        except Exception as exc:
+            # Reader libraries expose format-specific exceptions. Keep the
+            # shared API envelope while telling the caller what the parser saw.
+            raise SimAPIError(
+                f"Could not read the uploaded {recording_format} recording: {exc}",
+                code=ErrorCode.BAD_REQUEST,
+            ) from exc
+
+        rows = len(frame)
+        if rows > settings.max_recording_rows:
+            raise PayloadTooLargeError(
+                f"Recording contains {rows} converted samples; the recording limit is {settings.max_recording_rows}.",
+                details={"rows": rows, "limit": settings.max_recording_rows},
+            )
+        records = frame.astype(object).where(pd.notna(frame), None).to_dict(orient="records")
+        del frame
+        return records, recording_format, rows
+
+
+def _parse_recording_form_json(field_name: str, raw_value: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_value or "{}")
+    except json.JSONDecodeError as exc:
+        raise SimAPIError(
+            f"`{field_name}` must be valid JSON: {exc.msg}.", code=ErrorCode.BAD_REQUEST
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise SimAPIError(f"`{field_name}` must be a JSON object.", code=ErrorCode.BAD_REQUEST)
+    return parsed
+
+
 # ── Validation endpoints ─────────────────────────────────────────────────────────
 @app.post("/v1/validate", tags=["validation"])
 async def validate(req: ValidateRequest, _: str = Depends(caller_identity)):
@@ -1165,6 +1389,44 @@ async def validate_upload(
         run_ai=run_ai.lower() == "true",
     )
     return await _validate_core(req)
+
+
+@app.post("/v1/validate/recording", tags=["validation"])
+async def validate_recording_upload(
+    file: UploadFile = File(...),
+    topic_hint: str = Form("joint_states"),
+    robotics_limits: str = Form("{}"),
+    conditions: str = Form("{}"),
+    _: str = Depends(caller_identity),
+):
+    """Validate a ROS 2/MCAP/LeRobot recording using the standard robotics report."""
+    source_name = _recording_source_name(file.filename)
+    try:
+        limits = _parse_recording_form_json("robotics_limits", robotics_limits)
+        parsed_conditions = _parse_recording_form_json("conditions", conditions)
+        rows, recording_format, converted_rows = await _load_recording_upload(
+            file, topic_hint=topic_hint
+        )
+    finally:
+        await file.close()
+
+    try:
+        validate_request = ValidateRequest(
+            data=rows,
+            simulation_type=SimulationType.ROBOTICS,
+            robotics_limits=limits,
+            conditions=parsed_conditions,
+            run_ai=False,
+        )
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+    report = await _validate_core(validate_request)
+    report["recording"] = {
+        "format": recording_format,
+        "rows": converted_rows,
+        "source_name": source_name,
+    }
+    return report
 
 
 @app.post("/v1/validate/physics-only", tags=["validation"])

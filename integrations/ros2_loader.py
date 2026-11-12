@@ -77,7 +77,12 @@ def load_rosbag2(
     source = Path(bag).expanduser()
     if not source.exists():
         raise FileNotFoundError(source)
-    reader_path = source.parent if source.is_file() and source.suffix.lower() == ".db3" else source
+    # Modern rosbags can read a standalone rosbag2 storage file. When the
+    # standard metadata file exists, point the reader at the whole bag folder
+    # so relative_file_paths and other metadata remain authoritative.
+    reader_path = source
+    if source.is_file() and source.suffix.lower() == ".db3" and (source.parent / "metadata.yaml").is_file():
+        reader_path = source.parent
     rows: list[dict[str, Any]] = []
     last_stamp: dict[str, float] = {}
     reset_index: dict[str, int] = {}

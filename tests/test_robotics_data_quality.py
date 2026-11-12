@@ -213,11 +213,13 @@ def test_ros2_loader_preserves_effort_and_action_semantics(tmp_path, monkeypatch
         header=SimpleNamespace(stamp=SimpleNamespace(sec=2, nanosec=500_000_000)),
     )
 
+    reader_paths = []
+
     class FakeReader:
         connections = [connection]
 
-        def __init__(self, _paths):
-            pass
+        def __init__(self, paths):
+            reader_paths.append(paths)
 
         def __enter__(self):
             return self
@@ -239,10 +241,24 @@ def test_ros2_loader_preserves_effort_and_action_semantics(tmp_path, monkeypatch
     monkeypatch.setitem(sys.modules, "rosbags.highlevel", highlevel)
 
     frame = load_rosbag2(bag_dir)
+    assert reader_paths[-1] == [bag_dir]
     assert frame.loc[0, "t"] == pytest.approx(2.5)
     assert frame.loc[0, "joint_shoulder_pan_joint_effort"] == 2.0
     assert frame.loc[0, "joint_2_effort"] == 3.0
     assert not any(column.startswith("action_") for column in frame.columns)
+
+    standalone_db3 = tmp_path / "standalone.db3"
+    standalone_db3.touch()
+    load_rosbag2(standalone_db3)
+    assert reader_paths[-1] == [standalone_db3]
+
+    metadata_bag = tmp_path / "metadata_bag"
+    metadata_bag.mkdir()
+    (metadata_bag / "metadata.yaml").write_text("storage_identifier: sqlite3\n", encoding="utf-8")
+    metadata_db3 = metadata_bag / "run_0.db3"
+    metadata_db3.touch()
+    load_rosbag2(metadata_db3)
+    assert reader_paths[-1] == [metadata_bag]
 
 
 def test_ros2_loader_rejects_malformed_joint_state_arrays(tmp_path, monkeypatch):
