@@ -98,8 +98,33 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .landing-button-secondary:hover { background: #ebe7dd; }
 .hero-access { margin: 20px 0 0; color: var(--ink-muted); font-size: 14px; line-height: 20px; }
 
-.trajectory-figure { min-width: 0; margin: 0; padding-top: 12px; }
-.trajectory-plot { display: block; width: 100%; height: auto; overflow: visible; }
+.live-health-card { min-width: 0; margin: 0; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); }
+.live-health-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.live-health-eyebrow { margin: 0 0 5px; color: var(--amber); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.live-health-heading h2 { margin: 0; color: var(--ink); font-size: 21px; font-weight: 500; line-height: 1.3; }
+.live-health-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: 12px; }
+.live-health-status > span { width: 7px; height: 7px; border-radius: 50%; background: #a18b60; }
+.live-health-status-online > span { background: #477957; }
+.live-health-status-offline > span { background: #a13c32; }
+.live-health-current { display: flex; align-items: baseline; gap: 10px; margin-top: 24px; }
+.live-health-current strong { color: var(--ink); font-family: var(--font-mono); font-size: 31px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
+.live-health-current span { color: var(--ink-secondary); font-size: 12px; line-height: 1.4; }
+.live-health-chart-wrap { min-height: 185px; margin-top: 13px; }
+.live-health-chart { display: block; width: 100%; height: auto; overflow: visible; }
+.live-health-gridline { stroke: #ded9cf; stroke-width: 1; }
+.live-health-axis { stroke: #9d988d; stroke-width: 1.2; }
+.live-health-axis-label { fill: #747168; font-family: var(--font-mono); font-size: 11px; }
+.live-health-line { fill: none; stroke: #a95624; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.live-health-point { fill: #a95624; stroke: var(--paper-raised); stroke-width: 2; }
+.live-health-empty { display: grid; min-height: 185px; place-items: center; padding: 20px; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; text-align: center; }
+.live-health-caption { display: grid; gap: 4px; margin-top: 9px; color: var(--ink-secondary); font-size: 11px; line-height: 1.55; }
+.live-health-caption p { margin: 0; }
+.live-health-caption strong { color: var(--ink); font-weight: 600; }
+.live-health-caption code { color: var(--ink); font-family: var(--font-mono); }
+.live-health-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 17px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
+.live-health-facts div { min-width: 0; }
+.live-health-facts dt { color: var(--ink-muted); font-size: 10px; line-height: 1.4; text-transform: uppercase; letter-spacing: .04em; }
+.live-health-facts dd { overflow-wrap: anywhere; margin: 4px 0 0; color: var(--ink); font-family: var(--font-mono); font-size: 11px; line-height: 1.5; }
 
 .landing-page section:not(.landing-hero) { border-color: var(--line); }
 .landing-page .text-white, .landing-page h2, .landing-page h3, .landing-page th { color: var(--ink) !important; }
@@ -208,7 +233,7 @@ body:has(.site-page) { background: #f6f3ec; color: #24241f; }
   .hero-layout { grid-template-columns: 1fr; gap: 48px; }
   .hero-copy { max-width: 680px; }
   .hero-copy h1 { max-width: 660px; font-size: clamp(52px, 10vw, 76px); }
-  .trajectory-figure { max-width: 720px; }
+  .live-health-card { max-width: 720px; }
 }
 
 @media (max-width: 520px) {
@@ -221,7 +246,10 @@ body:has(.site-page) { background: #f6f3ec; color: #24241f; }
   .hero-description { margin-top: 20px; font-size: 17px; line-height: 27px; }
   .hero-actions { margin-top: 24px; }
   .hero-access { margin-top: 16px; }
-  .trajectory-figure { margin-inline: -4px; }
+  .live-health-card { margin-inline: -4px; padding: 17px; }
+  .live-health-current { align-items: flex-start; flex-direction: column; gap: 6px; margin-top: 19px; }
+  .live-health-facts { gap: 8px; }
+  .live-health-facts dd { font-size: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
