@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from integrations.recording_limits import RecordingSampleLimitExceeded
 from integrations.robotics_validation import validate_robotics_frame
 
 
@@ -79,12 +80,15 @@ def load_lerobot(
     dataset: str | Path,
     *,
     max_episodes: int | None = None,
+    max_rows: int | None = None,
     max_joints: int = 14,
     keep_timestamps: bool = True,
 ) -> pd.DataFrame:
     """Load local LeRobot parquet shards as episode-aware robotics rows."""
     if max_episodes is not None and max_episodes < 1:
         raise ValueError("max_episodes must be positive or None")
+    if max_rows is not None and (isinstance(max_rows, bool) or max_rows < 1):
+        raise ValueError("max_rows must be a positive integer or None")
     if max_joints < 1:
         raise ValueError("max_joints must be positive")
     root = Path(dataset).expanduser()
@@ -94,9 +98,22 @@ def load_lerobot(
     if not files:
         raise FileNotFoundError(f"No parquet files found under {root}")
 
+    if max_rows is not None:
+        try:
+            import pyarrow.parquet as parquet
+        except ImportError as exc:
+            raise RuntimeError("LeRobot parquet support requires the optional 'pyarrow' package") from exc
+        source_rows = 0
+        for parquet_path in files:
+            metadata = parquet.ParquetFile(parquet_path).metadata
+            source_rows += metadata.num_rows
+            if source_rows > max_rows:
+                raise RecordingSampleLimitExceeded(source_rows, max_rows)
+
     fps = _dataset_fps(root if root.is_dir() else root.parent)
     chunks: list[pd.DataFrame] = []
     episode_offset = 0
+    loaded_rows = 0
     for parquet_path in files:
         try:
             chunk = pd.read_parquet(parquet_path)
@@ -104,6 +121,9 @@ def load_lerobot(
             raise RuntimeError("LeRobot parquet support requires the optional 'pyarrow' package") from exc
         if chunk.empty:
             continue
+        loaded_rows += len(chunk)
+        if max_rows is not None and loaded_rows > max_rows:
+            raise RecordingSampleLimitExceeded(loaded_rows, max_rows)
         episode_column = next(
             (name for name in ("episode_index", "episode_id", "ep_idx", "trajectory_index") if name in chunk),
             None,
