@@ -17,6 +17,7 @@ services:
     runtime: python
     buildCommand: pip install -r requirements-mcp.txt
     startCommand: sh scripts/start_render_mcp.sh
+    healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: "3.12"

@@ -296,8 +296,9 @@ SIMAPI_PATH=/path/to/simAPI \
 python simapi_mcp.py
 ```
 
-Every HTTP request needs `Authorization: Bearer <token>`. Each token gets a
-fixed 60-second request window; requests over `SIMAPI_MCP_RATE_LIMIT` receive
+`GET /healthz` returns a fixed liveness status without authentication; MCP
+requests need `Authorization: Bearer <token>`. Each token gets a fixed
+60-second request window; requests over `SIMAPI_MCP_RATE_LIMIT` receive
 HTTP 429 and a `Retry-After` header. Rate counters are held in process memory,
 so run one server process per deployment unless you add a shared limiter.
 The server binds to `127.0.0.1` by default; set `SIMAPI_MCP_HOST=0.0.0.0`
