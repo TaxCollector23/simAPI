@@ -6,6 +6,6 @@ useDefault = true
 [[allowlists]]
 description = "The benchmark baseline is a Git commit ID, not a credential."
 condition = "AND"
-regexTarget = "match"
+regexTarget = "secret"
 regexes = ['''7a9d5c39c64b32926006f46c69f3ea9f38998aeb''']
 paths = ['''^benchmark/robotics_trajectory_benchmark\.py$''']
