@@ -10,3 +10,16 @@ services:
       - key: SIMAPI_WORKERS
         value: "2"
     plan: free
+  - type: web
+    name: simapi-mcp
+    runtime: python
+    buildCommand: pip install -r requirements-mcp.txt
+    startCommand: sh scripts/start_render_mcp.sh
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: SIMAPI_MCP_API_KEYS
+        generateValue: true
+      - key: SIMAPI_MCP_RATE_LIMIT
+        value: "60"
+    plan: free
