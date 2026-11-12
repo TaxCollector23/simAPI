@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Play, RefreshCw, Loader2, CheckCircle, XCircle,
@@ -249,37 +249,42 @@ function StatusPill({ status }: { status: string }) {
 
 function IssueRow({ issue }: { issue: Issue & { human_name?: string } }) {
   const [expanded, setExpanded] = useState(false);
+  const detailId = useId();
   const fail = issue.status === "failed";
   const informational = issue.status === "info";
   const name = (issue as { human_name?: string }).human_name || issue.description || issue.name;
   return (
     <div
-      className={cn("rounded-lg border cursor-pointer transition-colors", fail
+      className={cn("rounded-lg border transition-colors", fail
         ? "border-red-400/20 bg-red-400/5 hover:border-red-400/40"
         : informational
           ? "border-sky-400/15 bg-sky-400/5 hover:border-sky-400/35"
           : "border-amber-400/15 bg-amber-400/5 hover:border-amber-400/35")}
-      onClick={() => setExpanded(v => !v)}
     >
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        <span className={cn("text-sm shrink-0", fail ? "text-red-400" : informational ? "text-sky-300" : "text-amber-400")}>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        onClick={() => setExpanded(v => !v)}
+        className="flex w-full items-center gap-3 rounded-lg bg-transparent px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950"
+      >
+        <span aria-hidden="true" className={cn("text-sm shrink-0", fail ? "text-red-400" : informational ? "text-sky-300" : "text-amber-400")}>
           {fail ? "✗" : informational ? "ℹ" : "⚠"}
         </span>
+        <span className="sr-only">Status: {fail ? "failed" : informational ? "information" : "warning"}. </span>
         <span className="min-w-0 flex-1 text-xs text-white/75 font-medium leading-snug">{name}</span>
         <span className={cn("text-sm shrink-0 rounded px-1.5 py-0.5 border font-mono",
           fail ? "border-red-400/20 text-red-400/60" : informational ? "border-sky-400/20 text-sky-300/70" : "border-amber-400/20 text-amber-400/60")}>
           {issue.category}
         </span>
-        {expanded ? <ChevronUp className="h-3 w-3 text-white/20 shrink-0" /> : <ChevronDown className="h-3 w-3 text-white/20 shrink-0" />}
+        {expanded ? <ChevronUp aria-hidden="true" className="h-3 w-3 text-white/20 shrink-0" /> : <ChevronDown aria-hidden="true" className="h-3 w-3 text-white/20 shrink-0" />}
+      </button>
+      <div id={detailId} hidden={!expanded} className="border-t border-white/[0.06] px-3 py-2.5 text-xs text-white/45 leading-relaxed">
+        {issue.detail}
+        {issue.value !== null && issue.value !== undefined && (
+          <span className="ml-2 font-mono text-white/30">value: {fmtN(issue.value)}</span>
+        )}
       </div>
-      {expanded && (
-        <div className="border-t border-white/[0.06] px-3 py-2.5 text-xs text-white/45 leading-relaxed">
-          {issue.detail}
-          {issue.value !== null && issue.value !== undefined && (
-            <span className="ml-2 font-mono text-white/30">value: {fmtN(issue.value)}</span>
-          )}
-        </div>
-      )}
     </div>
   );
 }
