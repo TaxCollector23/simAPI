@@ -7,28 +7,29 @@ conversion stays in the existing integrations.
 ## Request path
 
 ```text
-Local client                         Hosted client
-     |                                     |
-     | MCP over stdio                     | HTTPS through a TLS proxy
-     v                                     v
-+------------------+            +--------------------------+
-| FastMCP tools    |            | ASGI security wrapper    |
-| (no HTTP auth)   |            | 1. bearer-token check   |
-+--------+---------+            | 2. per-token rate limit  |
-         |                      +------------+-------------+
-         +----------------------+             |
-                                v             v
-                         +--------------------------+
-                         | FastMCP Streamable HTTP  |
-                         +------------+-------------+
-                                      |
-                                      v
+Local MCP client                              Hosted MCP client
+      |                                              |
+      | stdio                                        | HTTPS through TLS proxy
+      v                                              v
++--------------------+                  +--------------------------+
+| FastMCP stdio      |                  | ASGI security wrapper    |
+| local paths allowed|                  | 1. bearer-token check   |
++---------+----------+                  | 2. per-token rate limit  |
+          |                             +------------+-------------+
+          |                                          |
+          |                             +------------v-------------+
+          |                             | FastMCP Streamable HTTP  |
+          |                             | uploads; no local paths |
+          |                             +------------+-------------+
+          +-------------------+----------------------+
+                              |
+                              v
              +------------------------+------------------------+
              |                                                 |
              v                                                 v
 +----------------------------+                    +--------------------------+
 | core.robotics_validation   |                    | integrations/            |
-| robotics engine + suites   |<-------------------| ros2_loader, lerobot     |
+| robotics engine + suites   |<-------------------| ROS 2, LeRobot loaders  |
 +----------------------------+                    +--------------------------+
 ```
 
@@ -38,18 +39,23 @@ failed checks, excluded rows, and episode summaries.
 
 ## Tools and data flow
 
-The six local tools validate a list of episode rows, validate a CSV, validate a
-recording by path, export whole clean episodes, return default screening
-limits, and explain a check name. The optional hosted upload tool accepts
-base64 file content and a filename; HTTP mode disables path-based recording
-access so a remote caller cannot ask the process to open arbitrary local files.
+The tools validate episode rows, validate a CSV by local path, validate a
+recording by local path, export clean episodes, return default screening
+limits, and explain a check name. The CSV-path and recording-path tools are
+stdio-only. Streamable HTTP rejects both kinds of local path; its upload tool
+accepts base64 file content and a filename for supported `.parquet`, `.db3`,
+`.mcap`, or `.zip` recordings instead. Uploads are content-checked, written to
+a temporary directory for decoding, and removed when the tool call completes.
+HTTP uploads are limited to 3 MiB so base64 and MCP framing fit within the
+SDK's default request body ceiling.
 
-CSV rows are read up to the configured cap plus one row so over-limit files are
-rejected instead of silently truncated. Recording uploads are content-checked,
-written to a private temporary directory, decoded through the existing
-integration loaders, and removed when the tool call completes. HTTP uploads are
-limited to 3 MiB so base64 and MCP framing fit within the SDK's default request
-body ceiling.
+File row limits are enforced as input is read or decoded. CSV reading stops at
+the configured cap plus one row, which detects an oversized file without
+loading it all or silently truncating it. Recording loaders receive the row
+cap while decoding, and reject oversized input before full conversion. An
+in-memory episode row list is checked against the same cap before validation.
+ZIP recordings are checked before extraction against
+`SIMAPI_MCP_MAX_ZIP_ENTRIES` (default 10,000).
 
 ```text
 rows / CSV / recording
@@ -65,8 +71,10 @@ rows / CSV / recording
 ```
 
 Clean export validates each episode independently and keeps or removes it as a
-whole. It preserves the caller's original row order, including interleaved
-episodes, and lists removed episodes with the checks that caused removal.
+whole. It includes only episodes with a passed verdict; an episode with a
+warning or failure is excluded and listed with the checks that caused removal.
+The export preserves the caller's original row order, including interleaved
+episodes.
 
 ## Transport and security
 
@@ -74,8 +82,9 @@ episodes, and lists removed episodes with the checks that caused removal.
 
 Stdio is for a local client launched on the same machine. The client talks to
 the MCP process through its input and output streams. Authentication and HTTP
-rate limiting are not used in this mode; local file paths remain available to
-the user running the process.
+rate limiting are not used in this mode. Both CSV validation by path and
+recording validation by local path are available to the user running the
+process.
 
 ### Streamable HTTP
 
@@ -92,5 +101,7 @@ shared cluster limiter. For remote deployment, bind behind a TLS-terminating
 proxy, set the host/origin allowlists, and keep API keys in the deployment's
 secret store.
 
-HTTP mode accepts uploaded recordings rather than local filesystem paths.
-Stdio mode's path-based tool remains available and unchanged.
+HTTP accepts recording uploads rather than local filesystem paths. The CSV
+path and recording path tools reject calls in HTTP mode, so a remote request
+cannot make the process open a caller-specified local file. A client can send
+episode rows directly or use the recording upload tool for a supported file.
