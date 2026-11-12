@@ -141,10 +141,10 @@ class ValidateRequest(BaseModel):
     conditions: dict[str, float] = Field(default_factory=dict, description="Input boundary conditions.")
     robotics_limits: dict[str, tuple[float, float]] = Field(
         default_factory=dict,
-        description="Optional per-signal robot limits in canonical units (rad, rad/s, Nm).",
+        description="Optional per-signal limits in canonical units: rad, rad/s, Nm for rotational effort, and N for prismatic effort.",
     )
-    units: dict[str, str] = Field(default_factory=dict, description="Units of submitted robotics signals; positions: rad|deg, velocities: rad/s|deg/s, torque/effort: Nm.")
-    robotics_limit_units: dict[str, str] = Field(default_factory=dict, description="Optional units for limit bounds; omitted limits are canonical (rad, rad/s, Nm).")
+    units: dict[str, str] = Field(default_factory=dict, description="Units of submitted robotics signals; positions: rad|deg (revolute) or m (prismatic), velocities: rad/s|deg/s (revolute) or m/s (prismatic), torque: Nm, and effort: Nm (revolute) or N (prismatic, with URDF joint type).")
+    robotics_limit_units: dict[str, str] = Field(default_factory=dict, description="Optional units for limit bounds; omitted limits are canonical (rad, rad/s, rotational effort Nm, prismatic effort N).")
     run_general: bool = Field(default=False, description="For robotics requests, also run general dimensional/APIE analysis for comparison only.")
     robotics_profile: Literal["ftc", "frc"] | None = Field(default=None, description="Optional school-robot telemetry profile; only valid with simulation_type=robotics.")
     ftc_limits: dict[str, Any] = Field(default_factory=dict, description="Optional FTC/FRC screening thresholds, such as motor_power or heading_jump_deg.")
@@ -1092,8 +1092,9 @@ async def _validate_robotics_core(
             for joint in kinematics_suite.urdf_geometry.active_joints:
                 if joint.joint_type == "prismatic":
                     position_signal = joint_signal_name(joint.name)
+                    joint_stem = position_signal.removesuffix("_position")
                     prismatic_signals.update(
-                        {position_signal, position_signal.removesuffix("_position") + "_velocity"}
+                        {position_signal, f"{joint_stem}_velocity", f"{joint_stem}_effort"}
                     )
         except (TypeError, ValueError) as exc:
             raise SimAPIError(

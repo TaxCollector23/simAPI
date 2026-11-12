@@ -518,6 +518,41 @@ def test_prismatic_joint_urdf_allows_meter_units(client):
     assert wrong_unit.status_code == 400
 
 
+def test_prismatic_joint_urdf_accepts_newton_effort_and_limits(client):
+    prismatic_urdf = """<robot name="slide">
+      <link name="base"/><link name="tool"/>
+      <joint name="slide" type="prismatic"><parent link="base"/><child link="tool"/>
+        <axis xyz="0 0 1"/>
+      </joint>
+    </robot>"""
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{
+            "joint_slide_position": 0.25,
+            "joint_slide_effort": 5.0,
+            "end_effector_x": 0.0,
+            "end_effector_y": 0.0,
+            "end_effector_z": 0.25,
+        }],
+        "simulation_type": "robotics",
+        "robotics_limits": {"joint_slide_effort": [-10.0, 10.0]},
+        "units": {"joint_slide_effort": "N"},
+        "robotics_limit_units": {"joint_slide_effort": "N"},
+        "urdf_xml": prismatic_urdf,
+        "run_ai": False,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["robotics_summary"]["unit_conversions"]["joint_slide_effort"] == "n->N"
+    effort_check = next(
+        check for check in body["robotics_checks"]
+        if check["name"] == "robotics_limit:joint_slide_effort"
+    )
+    assert effort_check["status"] == "passed"
+    assert effort_check["low"] == -10.0
+    assert effort_check["high"] == 10.0
+
+
 def test_urdf_kinematics_respects_configured_sample_cap(client, monkeypatch):
     from dataclasses import replace
 

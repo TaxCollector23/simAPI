@@ -40,3 +40,40 @@ def test_prismatic_joint_positions_and_velocities_require_urdf_joint_type():
         convert_robotics_inputs(
             frame, rows, {"joint_slide_position": "deg"}, prismatic_signals=linear
         )
+
+
+def test_prismatic_joint_effort_uses_newtons_and_converts_limit_units():
+    rows = [{"joint_slide_effort": 5.0}]
+    frame = pd.DataFrame(rows)
+    converted, _, limits, conversions = convert_robotics_inputs(
+        frame,
+        rows,
+        {"joint_slide_effort": "N"},
+        {"joint_slide_effort": (-10.0, 10.0)},
+        {"joint_slide_effort": "N"},
+        prismatic_signals={"joint_slide_effort"},
+    )
+
+    assert converted.loc[0, "joint_slide_effort"] == pytest.approx(5.0)
+    assert limits["joint_slide_effort"] == (-10.0, 10.0)
+    assert conversions == {"joint_slide_effort": "n->N"}
+    with pytest.raises(ValueError, match="Unsupported unit 'nm'"):
+        convert_robotics_inputs(
+            frame,
+            rows,
+            {"joint_slide_effort": "Nm"},
+            prismatic_signals={"joint_slide_effort"},
+        )
+
+
+def test_revolute_joint_effort_still_uses_newton_metres():
+    rows = [{"joint_elbow_effort": 5.0}]
+    frame = pd.DataFrame(rows)
+    converted, _, _, conversions = convert_robotics_inputs(
+        frame, rows, {"joint_elbow_effort": "Nm"}
+    )
+
+    assert converted.loc[0, "joint_elbow_effort"] == pytest.approx(5.0)
+    assert conversions == {}
+    with pytest.raises(ValueError, match="Unsupported unit 'n'"):
+        convert_robotics_inputs(frame, rows, {"joint_elbow_effort": "N"})
