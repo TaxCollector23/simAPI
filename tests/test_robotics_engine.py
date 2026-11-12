@@ -167,3 +167,29 @@ def test_physics_validator_torque_screening_bound_is_tightened():
     )
     check = next(check for check in report.issues if check.name == "bounds_joint_torque")
     assert check.status.value == "failed"
+
+
+def test_external_validation_adapter_marks_episodes_not_ready_for_unprofiled_warning():
+    from integrations.robotics_validation import validate_robotics_frame
+
+    report = validate_robotics_frame(pd.DataFrame([
+        {"episode_id": "pick", "time": 0.0, "joint_1_torque": 10.0},
+        {"episode_id": "place", "time": 0.0, "joint_1_torque": 12.0},
+    ]))
+
+    assert report["status"] == "warning"
+    assert report["training_ready"] is False
+    assert all(episode["excluded"] == 0 for episode in report["episodes"])
+    assert all(episode["training_ready"] is False for episode in report["episodes"])
+
+
+def test_external_validation_adapter_keeps_other_warnings_out_of_episode_readiness():
+    from integrations.robotics_validation import validate_robotics_frame
+
+    report = validate_robotics_frame(pd.DataFrame([
+        {"episode_id": "state_only", "temperature": 25.0},
+    ]))
+
+    assert any(check["status"] == "warning" for check in report["checks"])
+    assert not any(check["name"] == "robotics_unprofiled_signal" for check in report["checks"])
+    assert report["episodes"][0]["training_ready"] is True
