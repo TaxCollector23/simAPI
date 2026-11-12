@@ -1069,6 +1069,13 @@ async def _validate_robotics_core(
             "Robotics validation requires at least one sample.",
             code=ErrorCode.BAD_REQUEST,
         )
+    invalid_numeric_columns = ingest_meta.get("invalid_numeric_columns", [])
+    if invalid_numeric_columns:
+        raise SimAPIError(
+            "Robotics signal columns must contain at least one numeric sample.",
+            code=ErrorCode.BAD_REQUEST,
+            details={"columns": invalid_numeric_columns},
+        )
     if req.robotics_profile is not None and req.simulation_type != SimulationType.ROBOTICS:
         raise SimAPIError(
             "robotics_profile is only valid when simulation_type is 'robotics'.",
@@ -1407,7 +1414,17 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
             details={"rows": len(req.data), "limit": settings.max_rows},
         )
 
-    df, ingest_meta = ingester.ingest(req.data, format_hint="json")
+    expected_robotics_columns = (
+        set(req.units) | set(req.robotics_limits) | set(req.robotics_limit_units)
+        if req.simulation_type == SimulationType.ROBOTICS
+        else None
+    )
+    df, ingest_meta = ingester.ingest(
+        req.data,
+        format_hint="json",
+        robotics_mode=req.simulation_type == SimulationType.ROBOTICS,
+        expected_numeric_columns=expected_robotics_columns,
+    )
     # ``df.attrs`` is the pandas-sanctioned slot for user metadata (no warning).
     df.attrs["simapi_renamed"] = ingest_meta.get("columns_renamed", {})
 
@@ -2005,7 +2022,17 @@ async def validate_upload(
             code=ErrorCode.UNSUPPORTED_FORMAT,
             details={"allowed": [s.value for s in SimulationType]},
         ) from e
-    df, _meta = ingester.ingest(contents, filename=file.filename)
+    df, _meta = ingester.ingest(
+        contents,
+        filename=file.filename,
+        robotics_mode=sim == SimulationType.ROBOTICS,
+    )
+    if sim == SimulationType.ROBOTICS and _meta.get("invalid_numeric_columns"):
+        raise SimAPIError(
+            "Robotics signal columns must contain at least one numeric sample.",
+            code=ErrorCode.BAD_REQUEST,
+            details={"columns": _meta["invalid_numeric_columns"]},
+        )
     req = ValidateRequest(
         data=df.to_dict(orient="records"),
         simulation_type=sim,

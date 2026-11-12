@@ -59,6 +59,70 @@ def test_robotics_torque_bounds_cannot_be_training_ready(client):
     assert any(issue["name"] == "robotics_limit:joint_torque" for issue in body["issues"])
 
 
+def test_robotics_numeric_string_out_of_range_is_not_dropped(client):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"joint_1_position": "1000000000"}],
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["training_ready"] is False
+    check = next(
+        check for check in body["robotics_checks"]
+        if check["name"] == "robotics_limit:joint_1_position"
+    )
+    assert check["status"] == "failed"
+    assert check["violations"] == 1
+
+
+@pytest.mark.parametrize("invalid_value", ["not-a-number", True, {"nested": "value"}])
+def test_robotics_mixed_valid_and_invalid_signal_is_not_training_ready(client, invalid_value):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [
+            {"time": 0.0, "joint_1_position": "0.1"},
+            {"time": 0.1, "joint_1_position": invalid_value},
+        ],
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["training_ready"] is False
+    check = next(
+        check for check in body["robotics_checks"]
+        if check["name"] == "robotics_limit:joint_1_position"
+    )
+    assert check["status"] == "failed"
+    assert check["violations"] == 1
+
+
+@pytest.mark.parametrize("invalid_value", ["not-a-number", True, {"nested": "value"}])
+def test_robotics_all_invalid_signal_is_rejected_with_column_detail(client, invalid_value):
+    response = client.post("/v1/validate/physics-only", json={
+        "data": [{"time": 0.0, "joint_1_position": invalid_value}],
+        "simulation_type": "robotics",
+    })
+
+    assert response.status_code == 400
+    body = response.json()
+    assert "numeric sample" in body["error"]["message"]
+    assert body["error"]["details"]["columns"] == ["joint_1_position"]
+
+
+def test_robotics_upload_rejects_all_invalid_signal_before_ingestion_drops_it(client):
+    response = client.post(
+        "/v1/validate/upload",
+        data={"simulation_type": "robotics", "run_ai": "false"},
+        files={"file": ("run.csv", "time,joint_1_position\n0.0,not-a-number\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["details"]["columns"] == ["joint_1_position"]
+
+
 def test_robotics_model_limits_are_applied_per_joint(client):
     data = [{"joint_1_position": i / 10} for i in range(10)]
     response = client.post("/v1/validate/physics-only", json={
