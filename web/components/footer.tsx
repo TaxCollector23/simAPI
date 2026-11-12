@@ -3,29 +3,19 @@ import { site } from "@/lib/site";
 
 export function Footer() {
   return (
-    <footer className="landing-footer py-12">
+    <footer className="landing-footer border-t py-6">
       <div className="container-tight">
-        <div className="grid gap-10 md:grid-cols-[1.5fr_repeat(3,1fr)]">
-          <div className="max-w-sm">
-            <Link href="/" className="landing-footer-brand text-xl font-semibold">SimAPI</Link>
-            <p className="mt-4 text-sm leading-6 text-white/60">
-              Check robot recordings against limits you choose. See what needs a closer look.
-            </p>
-          </div>
-          {site.footerGroups.map((group) => (
-            <nav key={group.title} aria-label={group.title}>
-              <h2 className="text-sm font-medium">{group.title}</h2>
-              <ul className="mt-4 space-y-3">
-                {group.links.map((link) => (
-                  <li key={link.label}><Link href={link.href} className="text-sm text-white/60 transition-colors hover:text-white">{link.label}</Link></li>
-                ))}
-              </ul>
-            </nav>
-          ))}
-        </div>
-        <div className="landing-footer-bottom mt-12 flex flex-col gap-2 border-t border-white/10 pt-6 text-sm sm:flex-row sm:justify-between">
-          <p>© {new Date().getFullYear()} SimAPI</p>
-        </div>
+        <nav aria-label="Footer">
+          <ul className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            {site.footerLinks.map((link) => (
+              <li key={link.label}>
+                <Link href={link.href} className="text-sm text-white/60 transition-colors hover:text-white">
+                  {link.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </nav>
       </div>
     </footer>
   );
