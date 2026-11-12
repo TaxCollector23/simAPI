@@ -701,18 +701,20 @@ export function ValidationDashboard() {
           {/* Data input */}
           <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
             <div className="flex items-center justify-between mb-2">
-              <label className="text-sm text-white/60">Data (JSON array)</label>
-              <span className="text-sm text-white/20">{selectedSim.value === "robotics" ? "Joint signals · timestamp seconds · episode IDs" : "Column aliases are recognized"}</span>
+              <label htmlFor="simulation-data-input" className="text-sm text-white/60">Data (JSON array)</label>
+              <span id="simulation-data-mode" className="text-sm text-white/20">{selectedSim.value === "robotics" ? "Joint signals · timestamp seconds · episode IDs" : "Column aliases are recognized"}</span>
             </div>
             <textarea
+              id="simulation-data-input"
               value={rawInput}
               onChange={e => { setRawInput(e.target.value); setResult(null); setPhase("idle"); }}
               rows={14}
+              aria-describedby="simulation-data-mode simulation-data-help"
               className="w-full bg-black/20 border border-white/[0.06] rounded-xl p-3 font-mono text-xs text-white/60 leading-relaxed resize-y outline-none focus:border-accent-blue/40 transition-colors"
               placeholder={`[\n  {"cd": 0.312, "cl": 0.847, "re": 415000},\n  ...\n]`}
               spellCheck={false}
             />
-            <p className="mt-2 text-sm text-white/55">
+            <p id="simulation-data-help" className="mt-2 text-sm text-white/55">
               Each object is one simulation trial. Column names are auto-normalized.
             </p>
             {selectedSim.value === "robotics" && (
