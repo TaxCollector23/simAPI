@@ -28,6 +28,24 @@ SimAPI checks data; it does not certify a robot, prove sim-to-real transfer, or
 replace engineering review. A clean report means only that the checks in that
 run did not find a reported violation.
 
+## Feature bundle deployment map
+
+The Physical-AI bundle adds focused modules around the existing validation
+engine. These are the repository destinations for its files:
+
+| Bundle file | Repository destination | Purpose |
+| --- | --- | --- |
+| `simapi_mcp.py` | `simapi_mcp.py` | Expose robotics validation as MCP tools for local and authenticated hosted clients. |
+| `mcp-architecture.md` | `docs/mcp-architecture.md` | Explain the MCP request path and its stdio/HTTP security boundaries. |
+| `prompts.md` | `prompts.md` | Keep the complete fix-it and architecture prompts available to contributors. |
+| `physical_ai.py` | `core/physical_ai.py` | Add episode labels, stream synchronization, action/state checks, and clean episode export. |
+| `ftc_frc.py` | `core/ftc_frc.py` | Validate FTC/FRC power, encoders, battery, heading, and odometry signals. |
+| `dashboard_extras.js` | `dashboard/dashboard_extras.js` | Add episode chips, clean CSV export, and MCP setup to the existing static dashboard. |
+
+The engine modules live under `core/`; the browser add-on sits beside the
+static dashboard it extends; deployment and contributor guidance stay in the
+README and `docs/`.
+
 ## Manipulation-arm validation
 
 For robotics runs, SimAPI applies broad plausibility checks to recognized signals
@@ -252,6 +270,54 @@ The response includes `status`, `training_ready`, `issues`, `exclusions`, and
 per-signal statistics. The Node.js SDK accepts the same limits as
 `roboticsLimits` in its validation options. See the [API quickstart](https://simapilander.vercel.app/docs/quickstart)
 and [CLI guide](https://simapilander.vercel.app/docs/sdks/cli).
+
+## MCP server
+
+`simapi_mcp.py` exposes the robotics checks to MCP clients. Install the
+optional SDK dependency with `pip install "mcp<2"`. Local stdio mode keeps
+using the caller's local files:
+
+```bash
+SIMAPI_PATH=/path/to/simAPI python simapi_mcp.py
+```
+
+Streamable HTTP mode requires at least one bearer token before it starts.
+Keep keys in the process environment or a secrets manager; do not commit them
+to the repository. Multiple keys may be comma separated.
+
+```bash
+SIMAPI_MCP_TRANSPORT=streamable-http \
+SIMAPI_MCP_API_KEYS="$SIMAPI_MCP_KEY" \
+SIMAPI_MCP_RATE_LIMIT=60 \
+SIMAPI_MCP_MAX_ROWS=10000 \
+SIMAPI_MCP_HOST=0.0.0.0 \
+SIMAPI_MCP_ALLOWED_HOSTS="mcp.example.com:*" \
+SIMAPI_PATH=/path/to/simAPI \
+python simapi_mcp.py
+```
+
+Every HTTP request needs `Authorization: Bearer <token>`. Each token gets a
+fixed 60-second request window; requests over `SIMAPI_MCP_RATE_LIMIT` receive
+HTTP 429 and a `Retry-After` header. Rate counters are held in process memory,
+so run one server process per deployment unless you add a shared limiter.
+The server binds to `127.0.0.1` by default; set `SIMAPI_MCP_HOST=0.0.0.0`
+behind a TLS terminating reverse proxy when remote clients need to connect.
+Set `SIMAPI_MCP_ALLOWED_HOSTS` to the public hostnames and ports served by the
+proxy. Browser based MCP clients can also set `SIMAPI_MCP_ALLOWED_ORIGINS`;
+the SDK keeps its local-only defaults when these allowlists are unset.
+The episode, CSV, clean-episode, and recording tools reject more than
+`SIMAPI_MCP_MAX_ROWS` rows (default 10,000) instead of truncating them. The
+recording cap is passed into the LeRobot and ROS readers so they can reject
+oversized inputs before retaining a larger converted frame. ZIP uploads also
+reject more than `SIMAPI_MCP_MAX_ZIP_ENTRIES` entries (default 10,000).
+
+All path-based tools, including `validate_robotics_csv` and
+`validate_recording`, are disabled in HTTP mode. Send row data to
+`validate_robotics_episode`, or use `validate_recording_upload` with base64
+file content and a filename. Accepted `.parquet`, `.db3`, `.mcap`, and `.zip`
+files are written to a private temporary directory and removed after
+validation. The HTTP upload is capped at 3 MiB to fit the MCP SDK's default
+request-body limit. Stdio mode remains local and does not require a key.
 
 ## Current scope
 
