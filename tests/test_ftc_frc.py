@@ -25,3 +25,20 @@ def test_ftc_limits_can_be_overridden_and_common_headers_map():
     report = validate_ftc_log([{"time": 0, "motor_power": 1.4}], {"motor_power": (-2, 2)})
     assert report["verdict"] == "passed"
     assert FTC_DEFAULT_LIMITS["motor_power"] == (-1.0, 1.0)
+
+
+def test_ftc_empty_or_unrecognized_logs_fail_closed():
+    empty = validate_ftc_log([])
+    unrecognized = validate_ftc_log([{"time": 0.0, "comment": "no telemetry"}])
+
+    assert empty["verdict"] == "failed"
+    assert empty["failed_checks"][0]["name"] == "no_data"
+    assert unrecognized["verdict"] == "failed"
+    assert unrecognized["failed_checks"][0]["name"] == "no_robot_signals"
+
+
+def test_ftc_missing_time_caps_a_clean_range_pass_to_warning():
+    report = validate_ftc_log([{"left_motor_power": 0.5}])
+
+    assert report["verdict"] == "warning"
+    assert report["warnings"][0]["name"] == "time_coverage"
