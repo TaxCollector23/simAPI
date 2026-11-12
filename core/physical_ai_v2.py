@@ -987,14 +987,21 @@ def cluster_failures(failures: list[dict[str, Any]]) -> dict[str, Any]:
 
     Groups by (label, signal). Returns clusters sorted by count
     (biggest problem first), each with a plain-English name and up to
-    5 example row indices.
+    5 example row indices. Explicit warning statuses stay warnings;
+    status-less legacy entries are treated as failures.
     """
     clusters: dict[tuple[str, str], dict[str, Any]] = {}
-    total = 0
+    total_failures = 0
+    total_findings = 0
+    has_failed = False
+    has_warning = False
     for failure in failures or []:
         status = str(failure.get("status", "")).lower()
         if status and status not in {"failed", "warning"}:
             continue
+        # Legacy failure dictionaries often omit status; keep treating them
+        # as failures. Explicit warning checks retain their lower severity.
+        severity = status or "failed"
         name = str(failure.get("name") or failure.get("label")
                    or failure.get("failure_label") or failure.get("check")
                    or "unknown")
@@ -1025,14 +1032,22 @@ def cluster_failures(failures: list[dict[str, Any]]) -> dict[str, Any]:
             if status != "warning":
                 continue
         occurrence_count = max(violations, len(row_indices), 1)
-        total += occurrence_count
+        total_findings += occurrence_count
+        if severity == "failed":
+            total_failures += occurrence_count
+            has_failed = True
+        else:
+            has_warning = True
         key = (label, signal)
         cluster = clusters.setdefault(key, {
-            "label": label, "check": name, "signal": signal, "count": 0,
+            "label": label, "check": name, "signal": signal,
+            "status": severity, "count": 0,
             "example_rows": [], "example_row_indices": [],
             "name_plain": _plain_cluster_name(label, signal),
             "cluster_name": _plain_cluster_name(label, signal),
         })
+        if severity == "failed":
+            cluster["status"] = "failed"
         cluster["count"] += occurrence_count
         for cand in row_indices:
             if cand not in cluster["example_rows"]:
@@ -1041,12 +1056,14 @@ def cluster_failures(failures: list[dict[str, Any]]) -> dict[str, Any]:
                     cluster["example_row_indices"].append(cand)
     ordered = sorted(clusters.values(),
                      key=lambda c: (-c["count"], c["label"], c["signal"]))
+    verdict = "failed" if has_failed else "warning" if has_warning else "passed"
     return {
         "clusters": ordered,
-        "total_failures": total,
-        "verdict": "failed" if ordered else "passed",
+        "total_failures": total_failures,
+        "total_findings": total_findings,
+        "verdict": verdict,
         "detail": (
-            f"{total} failure(s) grouped into {len(ordered)} cluster(s)."
+            f"{total_findings} finding(s) grouped into {len(ordered)} cluster(s)."
             if ordered else "No failures to cluster."
         ),
     }
@@ -1105,7 +1122,15 @@ def torque_saturation_trend(rows: list[dict[str, Any]],
             ),
         }
 
-    values = [v for v in (_num(r.get(signal)) for r in rows) if v is not None]
+    # Keep the episode's temporal midpoint stable when readings are missing
+    # or non-finite. Filtering first would move samples across the midpoint
+    # and could reverse the apparent early-versus-late saturation trend.
+    mid = len(rows) // 2
+    first = [v for v in (_num(r.get(signal)) for r in rows[:mid])
+             if v is not None]
+    second = [v for v in (_num(r.get(signal)) for r in rows[mid:])
+              if v is not None]
+    sample_count = len(first) + len(second)
 
     def near_limit(v: float) -> bool:
         if isinstance(limit_value, tuple):
@@ -1115,22 +1140,24 @@ def torque_saturation_trend(rows: list[dict[str, Any]],
         cap = abs(limit_value)
         return abs(v) >= 0.95 * cap
 
-    if len(values) < 4:
-        return {"signal": signal, "samples": len(values),
+    if sample_count < 4 or not first or not second:
+        return {"signal": signal, "samples": sample_count,
                 "first_half_saturation": 0.0, "second_half_saturation": 0.0,
                 "first_half_fraction": 0.0, "second_half_fraction": 0.0,
                 "delta": 0.0, "trend": "unknown",
-                "detail": "Too few samples to judge a trend (need ≥ 4)."}
+                "detail": (
+                    "Each episode half needs valid samples to judge a trend."
+                    if sample_count >= 4 else
+                    "Too few samples to judge a trend (need ≥ 4)."
+                )}
 
-    mid = len(values) // 2
-    first, second = values[:mid], values[mid:]
     f1 = sum(1 for v in first if near_limit(v)) / len(first)
     f2 = sum(1 for v in second if near_limit(v)) / len(second)
     delta = f2 - f1
     trend = "increasing" if delta > 0.05 else (
         "decreasing" if delta < -0.05 else "flat")
     return {
-        "signal": signal, "samples": len(values),
+        "signal": signal, "samples": sample_count,
         "first_half_saturation": f1, "second_half_saturation": f2,
         "first_half_fraction": f1, "second_half_fraction": f2,
         "delta": delta, "trend": trend,

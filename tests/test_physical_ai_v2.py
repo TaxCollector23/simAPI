@@ -319,3 +319,40 @@ def test_torque_saturation_trend_reports_increasing_fraction_and_short_data():
     assert trend["delta"] == 1.0
     assert trend["trend"] == "increasing"
     assert short["trend"] == "unknown"
+
+
+def test_failure_clustering_preserves_warning_and_failure_severity():
+    warning_only = cluster_failures([
+        {"name": "profile_guard", "status": "warning", "violations": 0},
+    ])
+    assert warning_only["verdict"] == "warning"
+    assert warning_only["total_failures"] == 0
+    assert warning_only["total_findings"] == 1
+    assert warning_only["clusters"][0]["status"] == "warning"
+
+    mixed = cluster_failures([
+        {"name": "profile_guard", "status": "warning", "violations": 0},
+        {"name": "robotics_limit:joint_1_torque", "status": "failed",
+         "violations": 1},
+    ])
+    assert mixed["verdict"] == "failed"
+    assert mixed["total_failures"] == 1
+    assert mixed["total_findings"] == 2
+    assert {cluster["status"] for cluster in mixed["clusters"]} == {
+        "warning", "failed",
+    }
+
+
+def test_torque_saturation_trend_uses_original_midpoint_with_missing_reading():
+    rows = [
+        {"joint_1_torque": value}
+        for value in (0, 0, 0, 95, 0, 0, 0, None)
+    ]
+
+    trend = torque_saturation_trend(rows, "joint_1_torque", 100.0)
+
+    assert trend["samples"] == 7
+    assert trend["first_half_fraction"] == 0.25
+    assert trend["second_half_fraction"] == 0.0
+    assert trend["delta"] == -0.25
+    assert trend["trend"] == "decreasing"
