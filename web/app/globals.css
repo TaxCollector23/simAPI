@@ -73,61 +73,29 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .landing-nav .landing-mobile-link { color: var(--ink-secondary); }
 .landing-nav .landing-mobile-link:hover { background: #ebe7dd; color: var(--ink); }
 
-.landing-hero { min-height: 690px; padding: 168px 0 94px; }
-.hero-layout { display: grid; grid-template-columns: minmax(340px, .9fr) minmax(0, 1.1fr); align-items: center; gap: 52px; }
-.hero-copy { max-width: 540px; }
-.hero-context { margin: 0 0 22px; color: var(--amber); font-size: 15px; line-height: 22px; }
+.landing-hero { padding: 168px 0 72px; }
+.hero-layout { display: block; }
+.hero-copy { max-width: 850px; }
+.hero-context { margin: 0 0 18px; color: var(--amber); font-size: 15px; line-height: 22px; }
 .hero-copy h1 {
-  max-width: 620px;
+  max-width: 800px;
   margin: 0;
   color: var(--ink);
   font-family: var(--font-display), Georgia, serif;
-  font-size: clamp(54px, 6.2vw, 82px);
+  font-size: clamp(52px, 6.2vw, 78px);
   font-weight: 400;
-  line-height: .99;
+  line-height: 1.02;
   letter-spacing: -.035em;
   text-wrap: balance;
 }
-.hero-description { max-width: 480px; margin: 28px 0 0; color: var(--ink-secondary); font-size: 19px; line-height: 1.55; }
-.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.hero-description { max-width: 640px; margin: 22px 0 0; color: var(--ink-secondary); font-size: 18px; line-height: 1.55; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
 .landing-button { display: inline-flex; min-height: 48px; align-items: center; justify-content: center; gap: 9px; padding: 0 18px; border-radius: 7px; font-size: 15px; font-weight: 500; transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease; }
-.hero-actions { gap: 8px; }
-.hero-actions .landing-button { padding-inline: 14px; }
-.hero-actions .landing-button-claude { gap: 6px; padding-inline: 12px; font-size: 14px; }
 .landing-button:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 .landing-button-primary { background: var(--ink); color: var(--paper); }
 .landing-button-primary:hover { background: #3a3a32; }
 .landing-button-secondary { border: 1px solid #aaa69c; color: var(--ink); }
 .landing-button-secondary:hover { background: #ebe7dd; }
-.hero-access { margin: 20px 0 0; color: var(--ink-muted); font-size: 14px; line-height: 20px; }
-
-.live-health-card { min-width: 0; margin: 0; padding: 22px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-raised); }
-.live-health-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.live-health-eyebrow { margin: 0 0 5px; color: var(--amber); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.live-health-heading h2 { margin: 0; color: var(--ink); font-size: 21px; font-weight: 500; line-height: 1.3; }
-.live-health-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 7px; color: var(--ink-secondary); font-size: 12px; }
-.live-health-status > span { width: 7px; height: 7px; border-radius: 50%; background: #a18b60; }
-.live-health-status-online > span { background: #477957; }
-.live-health-status-offline > span { background: #a13c32; }
-.live-health-current { display: flex; align-items: baseline; gap: 10px; margin-top: 24px; }
-.live-health-current strong { color: var(--ink); font-family: var(--font-mono); font-size: 31px; font-weight: 500; line-height: 1; font-variant-numeric: tabular-nums; }
-.live-health-current span { color: var(--ink-secondary); font-size: 12px; line-height: 1.4; }
-.live-health-chart-wrap { min-height: 185px; margin-top: 13px; }
-.live-health-chart { display: block; width: 100%; height: auto; overflow: visible; }
-.live-health-gridline { stroke: #ded9cf; stroke-width: 1; }
-.live-health-axis { stroke: #9d988d; stroke-width: 1.2; }
-.live-health-axis-label { fill: #747168; font-family: var(--font-mono); font-size: 11px; }
-.live-health-line { fill: none; stroke: #a95624; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-.live-health-point { fill: #a95624; stroke: var(--paper-raised); stroke-width: 2; }
-.live-health-empty { display: grid; min-height: 185px; place-items: center; padding: 20px; color: var(--ink-secondary); font-size: 13px; line-height: 1.6; text-align: center; }
-.live-health-caption { display: grid; gap: 4px; margin-top: 9px; color: var(--ink-secondary); font-size: 11px; line-height: 1.55; }
-.live-health-caption p { margin: 0; }
-.live-health-caption strong { color: var(--ink); font-weight: 600; }
-.live-health-caption code { color: var(--ink); font-family: var(--font-mono); }
-.live-health-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 17px 0 0; padding-top: 14px; border-top: 1px solid var(--line); }
-.live-health-facts div { min-width: 0; }
-.live-health-facts dt { color: var(--ink-muted); font-size: 10px; line-height: 1.4; text-transform: uppercase; letter-spacing: .04em; }
-.live-health-facts dd { overflow-wrap: anywhere; margin: 4px 0 0; color: var(--ink); font-family: var(--font-mono); font-size: 11px; line-height: 1.5; }
 
 .landing-page section:not(.landing-hero) { border-color: var(--line); }
 .landing-page .text-white, .landing-page h2, .landing-page h3, .landing-page th { color: var(--ink) !important; }
@@ -232,27 +200,19 @@ body:has(.site-page) { background: #f6f3ec; color: #24241f; }
 
 @media (max-width: 900px) {
   .landing-wrap, .landing-nav .landing-nav-inner { width: min(100% - 48px, 720px); }
-  .landing-hero { min-height: 0; padding: 136px 0 64px; }
-  .hero-layout { grid-template-columns: 1fr; gap: 48px; }
+  .landing-hero { padding: 136px 0 64px; }
   .hero-copy { max-width: 680px; }
   .hero-copy h1 { max-width: 660px; font-size: clamp(52px, 10vw, 76px); }
-  .live-health-card { max-width: 720px; }
 }
 
 @media (max-width: 520px) {
   .landing-wrap, .landing-nav .landing-nav-inner { width: calc(100% - 40px); }
   .landing-nav { height: 68px; }
   .landing-hero { padding-top: 112px; padding-bottom: 48px; }
-  .hero-layout { gap: 36px; }
   .hero-context { margin-bottom: 16px; }
   .hero-copy h1 { font-size: 48px; }
   .hero-description { margin-top: 20px; font-size: 17px; line-height: 27px; }
   .hero-actions { margin-top: 24px; }
-  .hero-access { margin-top: 16px; }
-  .live-health-card { margin-inline: -4px; padding: 17px; }
-  .live-health-current { align-items: flex-start; flex-direction: column; gap: 6px; margin-top: 19px; }
-  .live-health-facts { gap: 8px; }
-  .live-health-facts dd { font-size: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
