@@ -23,6 +23,13 @@ from integrations.robotics_validation import validate_robotics_frame
 _JOINT_STATE_TYPES = {"sensor_msgs/msg/JointState", "sensor_msgs/JointState"}
 
 
+def _rosbags_type_name(msgtype: str) -> str:
+    """Normalize legacy ROS message names to rosbags' canonical form."""
+    if msgtype == "sensor_msgs/JointState":
+        return "sensor_msgs/msg/JointState"
+    return msgtype
+
+
 def _joint_stem(name: str) -> str:
     """Map a ROS joint name to a stable, collision-checkable signal prefix."""
     clean = str(name).strip()
@@ -106,7 +113,7 @@ def load_rosbag2(
             )
 
         for conn, recorded_ns, rawdata in reader.messages(connections=connections):
-            msg = reader.deserialize(rawdata, conn.msgtype)
+            msg = reader.deserialize(rawdata, _rosbags_type_name(conn.msgtype))
             names = [str(name) for name in (getattr(msg, "name", None) or [])]
             if not names:
                 continue
