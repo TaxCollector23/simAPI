@@ -3,8 +3,8 @@ title = "SimAPI Gitleaks configuration"
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "The legacy benchmark env-var name is non-secret and only occurs in its source file."
+[allowlist]
+description = "The legacy benchmark env-var name and public baseline revision are non-secret."
 condition = "AND"
 regexTarget = "line"
 regexes = ['''SIMAPI_TRAJECTORY_BASELINE"\s*,\s*"7a9d5c39c64b32926006f46c69f3ea9f38998aeb"''']
