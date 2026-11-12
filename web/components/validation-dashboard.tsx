@@ -24,6 +24,21 @@ import {
 // ── Simulation type config ────────────────────────────────────────────────────
 const SIM_TYPES: { value: string; label: string; conditions: { key: string; label: string; unit: string; default: number }[]; example: object[] }[] = [
   {
+    value: "robotics", label: "Robotics / Control",
+    conditions: [
+      { key: "payload",   label: "Payload mass",  unit: "kg",  default: 5  },
+      { key: "velocity",  label: "Max EE speed",  unit: "m/s", default: 1  },
+    ],
+    example: ["reach", "place"].flatMap((episode_id, episode) => Array.from({ length: 6 }, (_, sample) => ({
+      episode_id, time: Number((sample * 0.1).toFixed(2)),
+      joint_1_position: Number((episode * 0.4 + sample * 0.05).toFixed(3)),
+      joint_1_velocity: 0.5, joint_1_acceleration: 0, joint_1_torque: 12 + sample * 0.3,
+      joint_2_position: Number((0.4 - sample * 0.025).toFixed(3)),
+      joint_2_velocity: -0.25, joint_2_acceleration: 0, joint_2_torque: 8 + sample * 0.2,
+      end_effector_force: 15 + sample * 0.5,
+    }))),
+  },
+  {
     value: "aerodynamics", label: "Aerodynamics",
     conditions: [
       { key: "velocity",    label: "Freestream velocity", unit: "m/s",  default: 15   },
@@ -64,21 +79,6 @@ const SIM_TYPES: { value: string; label: string; conditions: { key: string; labe
       { temperature: 790, heat_flux: 9800,  thermal_efficiency: 0.34, carnot_efficiency: 0.625, nusselt_number: 144, prandtl_number: 0.71, emissivity: 0.85 },
       { temperature: 820, heat_flux: 0,     thermal_efficiency: 1.1,  carnot_efficiency: 0.625, nusselt_number: 156, prandtl_number: 0.71, emissivity: 0.85 },
     ],
-  },
-  {
-    value: "robotics", label: "Robotics / Control",
-    conditions: [
-      { key: "payload",   label: "Payload mass",  unit: "kg",  default: 5  },
-      { key: "velocity",  label: "Max EE speed",  unit: "m/s", default: 1  },
-    ],
-    example: ["reach", "place"].flatMap((episode_id, episode) => Array.from({ length: 6 }, (_, sample) => ({
-      episode_id, time: Number((sample * 0.1).toFixed(2)),
-      joint_1_position: Number((episode * 0.4 + sample * 0.05).toFixed(3)),
-      joint_1_velocity: 0.5, joint_1_acceleration: 0, joint_1_torque: 12 + sample * 0.3,
-      joint_2_position: Number((0.4 - sample * 0.025).toFixed(3)),
-      joint_2_velocity: -0.25, joint_2_acceleration: 0, joint_2_torque: 8 + sample * 0.2,
-      end_effector_force: 15 + sample * 0.5,
-    }))),
   },
   {
     value: "fluid_dynamics", label: "Fluid Dynamics / CFD",
@@ -389,6 +389,7 @@ export function ValidationDashboard() {
     setConditions(Object.fromEntries(cfg.conditions.map(c => [c.key, c.default])));
     if (value === "robotics") setEngineMode("legacy");
     if (cfg.example.length > 0) setRawInput(JSON.stringify(cfg.example, null, 2));
+    setTab(value === "robotics" ? "preflight" : "output");
     setPhase("idle"); setResult(null);
   }
 
@@ -518,7 +519,29 @@ export function ValidationDashboard() {
   const issues = result?.issues ?? [];
   const visible = showAll ? issues : issues.slice(0, 8);
 
-  if (selectedSim.value === "robotics") return <RoboticsWorkspace example={simConfig.example as Record<string, unknown>[]} domains={SIM_TYPES} onOtherDomain={changeSim} />;
+  if (selectedSim.value === "robotics") return (
+    <div className="validator-app">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-white/10 pb-5">
+        <div>
+          <p className="mb-2 text-xs font-medium uppercase tracking-widest text-accent-cyan">Simulation validator</p>
+          <h1 className="text-2xl font-medium text-white">Robotics / Control</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">Prepare a robot run, check trajectory quality and limits, then inspect the report in one workflow.</p>
+        </div>
+        <label className="min-w-56 text-sm text-white/65">
+          Validation domain
+          <select value={selectedSim.value} onChange={e => changeSim(e.target.value)} className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-900 px-3 py-2.5 text-sm text-white">
+            {SIM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="mb-6 flex gap-1 rounded-xl border border-white/[0.06] bg-ink-900/40 p-1">
+        {([["preflight", "Pre-flight & trajectory checks"], ["history", "History / Compare"]] as const).map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)} className={cn("flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-colors", tab === id ? "bg-white/10 text-white" : "text-white/55 hover:text-white")}>{label}</button>
+        ))}
+      </div>
+      {tab === "history" ? <HistoryPanel /> : <div className="sim-dashboard-robotics"><RoboticsWorkspace example={simConfig.example as Record<string, unknown>[]} /></div>}
+    </div>
+  );
 
   return (
     <div className="validator-app">
@@ -540,6 +563,13 @@ export function ValidationDashboard() {
           )}
         </div>
       </div>
+
+      <label className="mb-6 block max-w-sm text-sm text-white/65">
+        Validation domain
+        <select value={selectedSim.value} onChange={e => changeSim(e.target.value)} className="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-900 px-3 py-2.5 text-sm text-white">
+          {SIM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+        </select>
+      </label>
 
       {/* Pre-flight / Output tab switcher */}
       <div className="mb-6 flex gap-1 rounded-xl border border-white/[0.06] bg-ink-900/40 p-1">
@@ -583,18 +613,6 @@ export function ValidationDashboard() {
                 ? "See the dimensional analysis layers and their raw findings."
                 : "A summary of status, issues, and exclusions. Optional AI review adds a separate second pass."}
             </p>
-          </div>
-
-          {/* Simulation type */}
-          <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
-            <label className="mb-2 block text-sm font-medium text-white/75">Simulation type</label>
-            <select
-              value={selectedSim.value}
-              onChange={e => changeSim(e.target.value)}
-              className="w-full bg-black/30 border border-white/[0.08] rounded-xl px-3 py-2.5 text-sm text-white/75 outline-none focus:border-accent-blue/50 transition-colors"
-            >
-              {SIM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
           </div>
 
           {/* Dynamic conditions -- always shown now: even domains with no
