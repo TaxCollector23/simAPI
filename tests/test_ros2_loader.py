@@ -7,6 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from core.kinematics import joint_signal_name
 from integrations.ros2_loader import load_rosbag2
 
 
@@ -17,8 +18,16 @@ from integrations.ros2_loader import load_rosbag2
         ("sensor_msgs/msg/JointState", "sensor_msgs/msg/JointState"),
     ],
 )
-def test_load_rosbag2_normalizes_joint_state_type_for_rosbags(
-    tmp_path, monkeypatch, connection_type, expected_type
+@pytest.mark.parametrize(
+    ("joint_name", "expected_signal"),
+    [
+        ("joint1", "joint_1_position"),
+        ("joint_1", "joint_1_position"),
+        ("joint-1", "joint_1_position"),
+    ],
+)
+def test_load_rosbag2_normalizes_joint_state_type_and_joint_names(
+    tmp_path, monkeypatch, connection_type, expected_type, joint_name, expected_signal
 ):
     bag = tmp_path / "capture.mcap"
     bag.write_bytes(b"MCAP")
@@ -27,7 +36,7 @@ def test_load_rosbag2_normalizes_joint_state_type_for_rosbags(
         msgtype=connection_type,
     )
     message = SimpleNamespace(
-        name=["joint1"],
+        name=[joint_name],
         position=[0.25],
         velocity=[],
         effort=[],
@@ -66,4 +75,5 @@ def test_load_rosbag2_normalizes_joint_state_type_for_rosbags(
     frame = load_rosbag2(bag, topic_hint="joint_states")
 
     assert observed_types == [expected_type]
-    assert frame.loc[0, "joint_1_position"] == 0.25
+    assert joint_signal_name(joint_name) == expected_signal
+    assert frame.loc[0, expected_signal] == 0.25

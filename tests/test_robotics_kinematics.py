@@ -11,6 +11,7 @@ from core.kinematics import (
 )
 from core.robotics_engine import KinematicsSuite, RoboticsValidationEngine
 from core.robotics_validation import check_robotics_limits
+from integrations.ros2_loader import _joint_stem
 
 TWO_LINK_URDF = """
 <robot name="two_link_planar">
@@ -57,6 +58,45 @@ def test_two_link_planar_fk_matches_hand_computed_positions():
             signals,
         )
         assert actual == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize("joint_name", ["joint1", "joint_1", "joint-1"])
+def test_ros_numbered_joint_names_match_urdf_fk_signals(joint_name):
+    urdf = f"""
+    <robot name="numbered_joint">
+      <link name="base" /><link name="tool" />
+      <joint name="{joint_name}" type="revolute">
+        <parent link="base" /><child link="tool" />
+        <axis xyz="0 0 1" />
+      </joint>
+    </robot>
+    """
+    ros_signal = f"{_joint_stem(joint_name)}_position"
+    rows = [
+        {
+            ros_signal: 0.0,
+            "end_effector_x": 0.0,
+            "end_effector_y": 0.0,
+            "end_effector_z": 0.0,
+        }
+    ]
+
+    report = RoboticsValidationEngine().validate(
+        pd.DataFrame(rows),
+        source_rows=rows,
+        additional_suites=[KinematicsSuite(urdf)],
+    )
+
+    coverage = next(
+        (check for check in report["checks"] if check["name"] == "robotics_kinematics:coverage"),
+        None,
+    )
+    fk_check = next(
+        check for check in report["checks"] if check["name"] == "robotics_kinematics:end_effector_position"
+    )
+    assert coverage is None
+    assert fk_check["status"] == "passed"
+    assert report["summary"]["kinematics"]["coverage"] == 1.0
 
 
 def test_kinematics_suite_excludes_wrong_reported_hand_position_and_adds_evidence():

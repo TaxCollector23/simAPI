@@ -167,15 +167,25 @@ def parse_urdf_geometry(
     return URDFGeometry(root.get("name", "robot"), base_link, tip_link, paths[0])
 
 
-def joint_signal_name(joint_name: str) -> str:
-    """Map a URDF joint name using SimAPI's stable joint signal convention."""
+def normalize_joint_name(joint_name: str) -> str:
+    """Return the canonical signal stem for a ROS or URDF joint name."""
     stem = re.sub(r"[^a-z0-9_]+", "_", joint_name.strip().lower()).strip("_")
     stem = re.sub(r"_+", "_", stem)
     if not stem:
-        raise ValueError("URDF joint name cannot be normalized to a signal")
-    if not stem.startswith("joint"):
-        stem = f"joint_{stem}"
-    return f"{stem}_position"
+        raise ValueError("Joint name cannot be normalized to a signal")
+
+    # ROS commonly calls numbered joints ``joint1`` while other sources use
+    # ``joint_1`` or ``joint-1``. Give these equivalent spellings one signal
+    # name so imported JointState rows can be matched to URDF joints.
+    numeric = re.fullmatch(r"(?:joint_?)?(\d+)", stem)
+    if numeric:
+        return f"joint_{int(numeric.group(1))}"
+    return stem if stem.startswith("joint") else f"joint_{stem}"
+
+
+def joint_signal_name(joint_name: str) -> str:
+    """Map a URDF joint name using SimAPI's stable joint signal convention."""
+    return f"{normalize_joint_name(joint_name)}_position"
 
 
 def _rotation_rpy(roll: float, pitch: float, yaw: float) -> np.ndarray:
