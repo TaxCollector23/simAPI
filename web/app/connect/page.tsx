@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { ClaudeSpark } from "@/components/claude-spark";
+import { ChatGPTMark } from "@/components/chatgpt-mark";
 
 export const metadata: Metadata = {
   title: "Use SimAPI in Claude or ChatGPT",
@@ -24,31 +25,41 @@ export default function ConnectPage() {
       </header>
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2">
-        <section className="rounded-xl border border-[var(--line)] bg-[var(--paper-raised)] p-6 sm:p-8">
+        <Link
+          href="/connect/claude"
+          className="group rounded-xl border border-[var(--line)] bg-[var(--paper-raised)] p-6 transition-colors hover:bg-[var(--paper-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--amber)] sm:p-8"
+        >
           <div className="flex items-center gap-3">
-            <ClaudeSpark />
+            <span className="flex size-9 items-center justify-center rounded-full bg-[#eeeae0]">
+              <ClaudeSpark />
+            </span>
             <h2 className="text-xl font-medium text-[var(--ink)]">Claude</h2>
           </div>
           <p className="mt-3 text-sm leading-6 text-[var(--ink-secondary)]">
-            Follow the setup guide to add the SimAPI MCP connector.
+            Add SimAPI as a Claude connector.
           </p>
-          <Link
-            href="/connect/claude"
-            className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-[var(--amber)] hover:underline"
-          >
+          <span className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-[var(--amber)] group-hover:underline">
             Set up Claude <ArrowUpRight size={16} />
-          </Link>
-        </section>
-
-        <section className="rounded-xl border border-[var(--line)] bg-[var(--paper-raised)] p-6 sm:p-8">
-          <h2 className="text-xl font-medium text-[var(--ink)]">ChatGPT</h2>
-          <p className="mt-3 text-sm leading-6 text-[var(--ink-secondary)]">
-            ChatGPT connector setup is being wired up.
-          </p>
-          <span className="mt-6 inline-flex text-sm font-medium text-[var(--ink-muted)]">
-            Coming soon
           </span>
-        </section>
+        </Link>
+
+        <Link
+          href="/connect/chatgpt"
+          className="group rounded-xl border border-[var(--line)] bg-[var(--paper-raised)] p-6 transition-colors hover:bg-[var(--paper-soft)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--amber)] sm:p-8"
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex size-9 items-center justify-center rounded-full bg-[#eeeae0]">
+              <ChatGPTMark size={20} />
+            </span>
+            <h2 className="text-xl font-medium text-[var(--ink)]">ChatGPT</h2>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-[var(--ink-secondary)]">
+            Add SimAPI as a custom MCP server in ChatGPT.
+          </p>
+          <span className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-[var(--amber)] group-hover:underline">
+            Set up ChatGPT <ArrowUpRight size={16} />
+          </span>
+        </Link>
       </div>
     </div>
   );
