@@ -8,6 +8,7 @@ import {
   Plus, Trash2, Info, Timer, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { roboticsArmExample } from "@/lib/robotics-arm-example";
 import { PreflightPanel } from "./preflight-panel";
 import { HistoryPanel } from "./history-panel";
 import { DimensionalResultPanel } from "./dimensional-result-panel";
@@ -29,14 +30,7 @@ const SIM_TYPES: { value: string; label: string; conditions: { key: string; labe
       { key: "payload",   label: "Payload mass",  unit: "kg",  default: 5  },
       { key: "velocity",  label: "Max EE speed",  unit: "m/s", default: 1  },
     ],
-    example: ["reach", "place"].flatMap((episode_id, episode) => Array.from({ length: 6 }, (_, sample) => ({
-      episode_id, time: Number((sample * 0.1).toFixed(2)),
-      joint_1_position: Number((episode * 0.4 + sample * 0.05).toFixed(3)),
-      joint_1_velocity: 0.5, joint_1_acceleration: 0, joint_1_torque: 12 + sample * 0.3,
-      joint_2_position: Number((0.4 - sample * 0.025).toFixed(3)),
-      joint_2_velocity: -0.25, joint_2_acceleration: 0, joint_2_torque: 8 + sample * 0.2,
-      end_effector_force: 15 + sample * 0.5,
-    }))),
+    example: roboticsArmExample,
   },
   {
     value: "aerodynamics", label: "Aerodynamics",
