@@ -40,7 +40,13 @@ if REPO not in sys.path:
 import pandas as pd  # noqa: E402
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
-from core.robotics_engine import DEFAULT_ROBOTICS_LIMITS  # noqa: E402
+from core.kinematics import parse_urdf_geometry  # noqa: E402
+from core.physical_ai import _labels_from_checks  # noqa: E402
+from core.robotics_engine import (  # noqa: E402
+    DEFAULT_ROBOTICS_LIMITS,
+    KinematicsSuite,
+    RoboticsValidationEngine,
+)
 from core.robotics_validation import check_robotics_limits  # noqa: E402
 
 mcp = FastMCP("simapi")
@@ -63,7 +69,24 @@ CHECK_GLOSSARY = {
     "robotics_time_order": "Time went backwards or repeated inside an episode.",
     "robotics_sample_gaps": "There is a silent gap in time bigger than max_time_step "
                             "(missing samples).",
-    "robotics_time_coverage": "No usable time column, so motion checks could not run.",
+    "robotics_time_coverage": "No usable time column, so motion checks could not run. "
+                              "Add a numeric 'time' column in seconds to every row.",
+    "robotics_chatter": "High-frequency velocity oscillation (spectral FFT check). "
+                        "The motion stays inside every static limit but oscillates above "
+                        "chatter_min_frequency_hz — this burns out real actuators. Common "
+                        "in simulated policies that never touched hardware.",
+    "robotics_energy": "Kinetic energy changed between samples with no recorded effort "
+                       "that can explain it — the signature of a physics-engine "
+                       "contact-solver explosion. Fix the simulation, not the data.",
+    "robotics_kinematics": "The reported end-effector position disagrees with forward "
+                           "kinematics computed from the URDF and the joint positions.",
+    "robotics_unprofiled_signal": "A signal was checked against very wide screening "
+                                  "defaults only, not the robot's real limits. Pass "
+                                  "robotics_limits (or a URDF) for a real verdict.",
+    "robotics_not_evaluated": "A requested check could not run (missing signals, "
+                              "non-uniform sampling, too few samples). This is a "
+                              "fail-closed report, not a pass. See the check detail "
+                              "for the exact reason.",
 }
 
 
@@ -124,8 +147,56 @@ def _validate_limits(robotics_limits: dict | None) -> dict:
     return limits
 
 
+def _validate_dynamics_conditions(
+    max_chatter_power_ratio: float | None,
+    chatter_min_frequency_hz: float | None,
+    energy_anomaly_factor: float | None,
+) -> dict:
+    """Validate and pack the optional dynamics-check conditions."""
+    conditions: dict = {}
+    if max_chatter_power_ratio is not None:
+        if not (0 < max_chatter_power_ratio < 1):
+            raise ValueError(
+                "max_chatter_power_ratio must be between 0 and 1 — the fraction of "
+                "velocity spectral power above chatter_min_frequency_hz that counts as "
+                "actuator chatter. A good default is 0.25."
+            )
+        conditions["max_chatter_power_ratio"] = max_chatter_power_ratio
+    if chatter_min_frequency_hz is not None:
+        if not (chatter_min_frequency_hz > 0):
+            raise ValueError(
+                "chatter_min_frequency_hz must be a positive cutoff frequency in Hz "
+                "(e.g. 10.0). It must stay below the episode's Nyquist frequency, "
+                "1 / (2 * median sampling interval)."
+            )
+        conditions["chatter_min_frequency_hz"] = chatter_min_frequency_hz
+    if energy_anomaly_factor is not None:
+        if not (energy_anomaly_factor > 1):
+            raise ValueError(
+                "energy_anomaly_factor must be greater than 1 — how many times the "
+                "episode's robust work/energy residual scale counts as an unexplained "
+                "energy spike. A good default is 100."
+            )
+        conditions["energy_anomaly_factor"] = energy_anomaly_factor
+    return conditions
+
+
+_DYNAMICS_PARAMS_DOC = (
+    "max_chatter_power_ratio / chatter_min_frequency_hz: optional actuator-chatter "
+    "check (FFT spectral power on joint velocity). Flags windows whose power above "
+    "chatter_min_frequency_hz (Hz) exceeds the ratio; ratio defaults to 0.25. "
+    "Needs a numeric 'time' column (seconds) with near-uniform sampling and >= 16 samples.\n"
+    "    energy_anomaly_factor: optional energy-conservation check. Flags intervals whose "
+    "kinetic-energy change cannot be explained by recorded torque/effort work; needs "
+    "joint velocities plus joint_N_torque or joint_N_effort. A good default is 100.\n"
+)
+
+
 def _run(rows: list[dict], robotics_limits: dict | None,
-         max_time_step: float | None, velocity_tolerance: float | None) -> dict:
+         max_time_step: float | None, velocity_tolerance: float | None,
+         max_chatter_power_ratio: float | None = None,
+         chatter_min_frequency_hz: float | None = None,
+         energy_anomaly_factor: float | None = None) -> dict:
     _enforce_row_cap(len(rows))
     if not rows:
         # Fail closed: nothing to validate is not a pass.
@@ -142,6 +213,9 @@ def _run(rows: list[dict], robotics_limits: dict | None,
         conditions["max_time_step"] = max_time_step
     if velocity_tolerance is not None:
         conditions["velocity_tolerance"] = velocity_tolerance
+    conditions.update(_validate_dynamics_conditions(
+        max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor
+    ))
     limits = _validate_limits(robotics_limits)
     report = check_robotics_limits(
         pd.DataFrame(rows), limits, source_rows=rows, conditions=conditions
@@ -183,24 +257,29 @@ def validate_robotics_episode(
     robotics_limits: dict | None = None,
     max_time_step: float | None = None,
     velocity_tolerance: float | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Validate robot-arm trajectory data with SimAPI.
 
     rows: list of samples, one dict per moment in time, e.g.
           {"episode_id": "pick_cup_01", "time": 0.02,
            "joint_1_position": 0.02, "joint_1_velocity": 1.0, "joint_1_torque": 6.0}
-          Positions in radians, time in seconds. Multiple episodes per call are OK
-          if each row has an episode_id.
+          Positions in radians, velocities in rad/s, time in seconds. Multiple
+          episodes per call are OK if each row has an episode_id.
     robotics_limits: allowed [min, max] per signal, e.g.
           {"joint_1_position": [-1.57, 1.57], "joint_1_torque": [-70, 70]}.
           Signals not listed fall back to very wide screening defaults.
     max_time_step: optional, seconds. Flag silent time gaps bigger than this.
     velocity_tolerance: optional, absolute. Also check that velocity implied by
           position changes agrees with the recorded velocity.
-    Returns verdict (passed/failed), the checks that failed, and the exact
-    excluded rows with reasons.
+    """ + _DYNAMICS_PARAMS_DOC + """Returns verdict (passed/failed), the checks that
+    failed, and the exact excluded rows with reasons. Use explain_robotics_check on
+    any failed check name for a plain-English explanation and fix hint.
     """
-    return _run(rows, robotics_limits, max_time_step, velocity_tolerance)
+    return _run(rows, robotics_limits, max_time_step, velocity_tolerance,
+                max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor)
 
 
 @mcp.tool()
@@ -209,11 +288,16 @@ def validate_robotics_csv(
     robotics_limits: dict | None = None,
     max_time_step: float | None = None,
     velocity_tolerance: float | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Validate a CSV file of robot trajectory data with SimAPI.
 
-    The CSV needs one row per sample and columns like time, episode_id,
-    joint_1_position, joint_1_velocity, joint_1_torque.
+    The CSV needs one row per sample and columns like time (seconds),
+    episode_id, joint_1_position (rad), joint_1_velocity (rad/s),
+    joint_1_torque (Nm). Missing or non-numeric timestamps are reported as
+    not-evaluated checks — add a numeric 'time' column so motion checks run.
     Same limits/conditions as validate_robotics_episode. Local paths are
     available in stdio mode only; HTTP clients must send rows or use uploads.
     """
@@ -225,7 +309,8 @@ def validate_robotics_csv(
     df = pd.read_csv(csv_path, nrows=_max_rows() + 1)
     rows = df.where(pd.notnull(df), None).to_dict("records")
     _enforce_row_cap(len(rows), lower_bound=True)
-    return _run(rows, robotics_limits, max_time_step, velocity_tolerance)
+    return _run(rows, robotics_limits, max_time_step, velocity_tolerance,
+                max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor)
 
 
 def _clean_loader_report(report: dict) -> dict:
@@ -275,6 +360,9 @@ def _validate_recording_path(
     velocity_tolerance: float | None,
     topic_hint: str,
     max_episodes: int | None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Load a recording once, enforce the configured row cap, then validate it."""
     from integrations.lerobot_loader import load_lerobot
@@ -282,7 +370,8 @@ def _validate_recording_path(
     from integrations.ros2_loader import load_rosbag2
 
     limits, conditions = _limits_and_conditions(
-        robotics_limits, max_time_step, velocity_tolerance
+        robotics_limits, max_time_step, velocity_tolerance,
+        max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor,
     )
     target = Path(path).expanduser()
     if not target.exists():
@@ -314,12 +403,18 @@ def _validate_recording_path(
     return _clean_loader_report(report)
 
 
-def _limits_and_conditions(robotics_limits, max_time_step, velocity_tolerance):
+def _limits_and_conditions(robotics_limits, max_time_step, velocity_tolerance,
+                           max_chatter_power_ratio=None,
+                           chatter_min_frequency_hz=None,
+                           energy_anomaly_factor=None):
     conditions: dict = {}
     if max_time_step is not None:
         conditions["max_time_step"] = max_time_step
     if velocity_tolerance is not None:
         conditions["velocity_tolerance"] = velocity_tolerance
+    conditions.update(_validate_dynamics_conditions(
+        max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor
+    ))
     return _validate_limits(robotics_limits), conditions
 
 
@@ -331,6 +426,9 @@ def validate_recording(
     velocity_tolerance: float | None = None,
     topic_hint: str = "joint_states",
     max_episodes: int | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Validate a robot recording file straight from chat — no CSV conversion.
 
@@ -343,7 +441,7 @@ def validate_recording(
           NOTE for ROS bags: effort comes through as joint_N_effort, not
           joint_N_torque — put torque limits under the _effort name.
     max_time_step / velocity_tolerance: same as validate_robotics_episode.
-    topic_hint: ROS topic substring to read JointState messages from
+    """ + _DYNAMICS_PARAMS_DOC + """    topic_hint: ROS topic substring to read JointState messages from
           (default "joint_states").
     max_episodes: LeRobot only — validate at most this many episodes.
     Returns the same verdict shape as validate_robotics_episode, plus
@@ -364,6 +462,9 @@ def validate_recording(
         velocity_tolerance,
         topic_hint,
         max_episodes,
+        max_chatter_power_ratio,
+        chatter_min_frequency_hz,
+        energy_anomaly_factor,
     )
 
 
@@ -476,12 +577,16 @@ def validate_recording_upload(
     velocity_tolerance: float | None = None,
     topic_hint: str = "joint_states",
     max_episodes: int | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Validate an uploaded recording in HTTP mode.
 
     content_base64: base64-encoded bytes from one .parquet, .db3, .mcap or .zip file.
     filename: original file name; only its final path component is used.
-    """
+    Same limits/conditions as validate_robotics_episode.
+    """ + _DYNAMICS_PARAMS_DOC
     if not isinstance(content_base64, str) or not isinstance(filename, str):
         raise ValueError("content_base64 and filename are required strings.")
     approximate_bytes = (len(content_base64) * 3) // 4
@@ -525,6 +630,9 @@ def validate_recording_upload(
             velocity_tolerance,
             topic_hint,
             max_episodes,
+            max_chatter_power_ratio,
+            chatter_min_frequency_hz,
+            energy_anomaly_factor,
         )
         report["source"] = clean_name
         return report
@@ -539,6 +647,9 @@ def export_clean_episodes(
     robotics_limits: dict | None = None,
     max_time_step: float | None = None,
     velocity_tolerance: float | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
 ) -> dict:
     """Export ONLY the clean episodes from robot trajectory data.
 
@@ -551,7 +662,7 @@ def export_clean_episodes(
 
     rows / robotics_limits / max_time_step / velocity_tolerance: same as
     validate_robotics_episode.
-
+    """ + _DYNAMICS_PARAMS_DOC + """
     Returns:
       clean_rows:       the rows to train on (clean episodes only).
       kept_episodes:    episode ids that passed.
@@ -575,7 +686,9 @@ def export_clean_episodes(
     removed: list[dict] = []
     for name in order:
         ep_rows = groups[name]
-        result = _run(ep_rows, robotics_limits, max_time_step, velocity_tolerance)
+        result = _run(ep_rows, robotics_limits, max_time_step, velocity_tolerance,
+                      max_chatter_power_ratio, chatter_min_frequency_hz,
+                      energy_anomaly_factor)
         if result["verdict"] == "passed":
             kept.append(name)
         else:
@@ -605,6 +718,253 @@ def export_clean_episodes(
             "episodes_removed": len(removed),
         },
     }
+
+
+@mcp.tool()
+def validate_and_filter_episodes(
+    rows: list[dict],
+    robotics_limits: dict | None = None,
+    max_time_step: float | None = None,
+    velocity_tolerance: float | None = None,
+    max_chatter_power_ratio: float | None = None,
+    chatter_min_frequency_hz: float | None = None,
+    energy_anomaly_factor: float | None = None,
+    urdf_xml: str | None = None,
+    kinematics_tolerance_m: float = 0.01,
+    min_workspace_z: float | None = None,
+    min_self_collision_clearance_m: float | None = None,
+    max_rejected_episodes: int = 5,
+    run_id: str | None = None,
+) -> dict:
+    """Validate every episode and return ONLY the training-ready episode IDs.
+
+    This is the one-call dataset filter for agents: it runs the FULL SimAPI
+    robotics engine on each episode — scalar limits, trajectory motion
+    checks, actuator chatter (FFT spectral check), energy conservation,
+    humanoid contact checks, and, when urdf_xml is provided, URDF forward-
+    kinematics consistency plus optional workspace-floor and capsule
+    self-collision geometry checks.
+
+    rows / robotics_limits / max_time_step / velocity_tolerance: same as
+    validate_robotics_episode. Positions in radians, velocities in rad/s,
+    effort in Nm (revolute) or N (prismatic), time in seconds.
+    """ + _DYNAMICS_PARAMS_DOC + """
+    urdf_xml: optional URDF XML string. When given, each episode is also
+          checked against URDF forward kinematics (end-effector x/y/z columns,
+          tolerance kinematics_tolerance_m in meters, default 0.01).
+    kinematics_tolerance_m: end-effector position tolerance in meters.
+    min_workspace_z: optional workspace floor in meters; FK tip positions
+          below it fail the episode (catches floor clipping that joint
+          limits alone cannot see).
+    min_self_collision_clearance_m: optional minimum surface clearance in
+          meters between non-adjacent link capsules (URDF cylinder/capsule
+          collision geometry).
+    max_rejected_episodes: how many rejected episodes to return inline
+          (default 5, ranked worst-first). The full per-episode evidence for
+          every episode is kept under the returned run_id — call
+          get_episode_evidence for any episode not inlined here. This keeps
+          large batches from overflowing the model context.
+    run_id: optional caller-chosen identifier for the evidence store.
+
+    Returns:
+      training_ready_episodes: episode IDs whose checks all passed (safe to train on).
+      rejected_episodes: the top max_rejected_episodes worst episodes, each
+                           compact: {episode_id, samples, verdict,
+                           failure_labels, failed_check_names}.
+      rejected_episodes_total / omitted_rejected_episodes: full count and how
+                           many were left out of the inline list.
+      rejected_by_check: how many episodes each failing check removed.
+      run_id: identifier for get_episode_evidence(run_id, episode_id).
+      summary: episode/row counts in, ready, and rejected.
+    """
+    _enforce_row_cap(len(rows))
+    if isinstance(max_rejected_episodes, bool) or not isinstance(max_rejected_episodes, int) \
+            or max_rejected_episodes < 0:
+        raise ValueError("max_rejected_episodes must be a non-negative integer.")
+    if not rows:
+        # Fail closed: nothing to validate is not a pass.
+        return {
+            "training_ready_episodes": [],
+            "rejected_episodes": [{"episode_id": "(none)",
+                                   "samples": 0, "verdict": "failed",
+                                   "failure_labels": [],
+                                   "failed_check_names": ["no_data"]}],
+            "rejected_episodes_total": 1,
+            "omitted_rejected_episodes": 0,
+            "rejected_by_check": {"no_data": 1},
+            "run_id": None,
+            "summary": {"episodes_in": 0, "episodes_ready": 0, "episodes_rejected": 1,
+                        "rows_in": 0, "rows_ready": 0},
+        }
+    conditions: dict = {}
+    if max_time_step is not None:
+        conditions["max_time_step"] = max_time_step
+    if velocity_tolerance is not None:
+        conditions["velocity_tolerance"] = velocity_tolerance
+    conditions.update(_validate_dynamics_conditions(
+        max_chatter_power_ratio, chatter_min_frequency_hz, energy_anomaly_factor
+    ))
+    limits = _validate_limits(robotics_limits)
+
+    engine = RoboticsValidationEngine()
+    if urdf_xml:
+        if not (kinematics_tolerance_m >= 0) or kinematics_tolerance_m != kinematics_tolerance_m:
+            raise ValueError("kinematics_tolerance_m must be a finite non-negative number in meters.")
+        engine.suites.append(KinematicsSuite(
+            parse_urdf_geometry(urdf_xml), tolerance_m=kinematics_tolerance_m,
+            min_workspace_z=min_workspace_z,
+            min_self_collision_clearance_m=min_self_collision_clearance_m,
+        ))
+
+    key = next((k for k in _EPISODE_KEYS if any(k in r for r in rows)), None)
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for row in rows:
+        name = str(row.get(key, "(missing episode)")) if key else "Episode 1"
+        if name not in groups:
+            groups[name] = []
+            order.append(name)
+        groups[name].append(row)
+
+    ready: list[str] = []
+    rejected: list[dict] = []
+    rejected_by_check: dict[str, int] = {}
+    rows_ready = 0
+    evidence_by_episode: dict[str, dict] = {}
+    for name in order:
+        ep_rows = groups[name]
+        report = check_robotics_limits(
+            pd.DataFrame(ep_rows), limits, source_rows=ep_rows,
+            conditions=conditions, engine=engine,
+        )
+        failed = [c for c in report["checks"] if c.get("status") == "failed"]
+        warnings = [c for c in report["checks"] if c.get("status") == "warning"]
+        flagged_rows = sorted(report.get("excluded") or {})
+        evidence_by_episode[name] = {
+            "episode_id": name,
+            "samples": len(ep_rows),
+            "verdict": "failed" if failed else "warning" if warnings else "passed",
+            "failure_labels": _labels_from_checks(report["checks"]),
+            "failed_checks": [
+                {"name": c["name"], "detail": c.get("detail", "")} for c in failed
+            ],
+            "warning_checks": [
+                {"name": c["name"], "detail": c.get("detail", "")} for c in warnings
+            ],
+            "flagged_sample_positions": flagged_rows[:200],
+            "flagged_sample_count": len(flagged_rows),
+            # On-demand inspection: the rows around the first violations.
+            "first_violation_rows": [ep_rows[i] for i in flagged_rows[:5] if i < len(ep_rows)],
+        }
+        if not failed and not warnings:
+            ready.append(name)
+            rows_ready += len(ep_rows)
+            continue
+        for check in failed:
+            rejected_by_check[check["name"]] = rejected_by_check.get(check["name"], 0) + 1
+        rejected.append({
+            "episode_id": name,
+            "samples": len(ep_rows),
+            "verdict": "failed" if failed else "warning",
+            "failure_labels": _labels_from_checks(report["checks"]),
+            "failed_checks": [
+                {"name": c["name"], "detail": c.get("detail", "")} for c in failed
+            ],
+            "warning_checks": [
+                {"name": c["name"], "detail": c.get("detail", "")} for c in warnings
+            ],
+        })
+
+    # Context-safe pagination: worst episodes first (most failed checks, then
+    # most samples), compacted to check names only.
+    ranked = sorted(
+        rejected,
+        key=lambda episode: (-len(episode["failed_checks"]), -episode["samples"], episode["episode_id"]),
+    )
+    inline = [
+        {
+            "episode_id": episode["episode_id"],
+            "samples": episode["samples"],
+            "verdict": episode["verdict"],
+            "failure_labels": episode["failure_labels"],
+            "failed_check_names": [c["name"] for c in episode["failed_checks"]],
+        }
+        for episode in ranked[:max_rejected_episodes]
+    ]
+    stored_run_id = _store_evidence(run_id, evidence_by_episode, rows_ready)
+    return {
+        "training_ready_episodes": ready,
+        "rejected_episodes": inline,
+        "rejected_episodes_total": len(rejected),
+        "omitted_rejected_episodes": max(0, len(rejected) - max_rejected_episodes),
+        "rejected_by_check": rejected_by_check,
+        "run_id": stored_run_id,
+        "summary": {
+            "episodes_in": len(order),
+            "episodes_ready": len(ready),
+            "episodes_rejected": len(rejected),
+            "rows_in": len(rows),
+            "rows_ready": rows_ready,
+        },
+        "detail": (
+            f"Showing {len(inline)} of {len(rejected)} rejected episode(s); use "
+            f"get_episode_evidence(run_id={stored_run_id!r}, episode_id=...) for "
+            "any episode's full checks and offending samples."
+            if len(rejected) > len(inline)
+            else None
+        ),
+    }
+
+
+# In-memory evidence store for on-demand episode inspection. Runs are capped
+# so a hosted process cannot grow without bound; deployment is single-process.
+_EVIDENCE_STORE: dict[str, dict] = {}
+_EVIDENCE_STORE_MAX_RUNS = 64
+
+
+def _store_evidence(run_id: str | None, evidence_by_episode: dict, rows_ready: int) -> str:
+    """Register per-episode evidence under a run id (auto-generated if absent)."""
+    import uuid
+
+    stored = str(run_id) if run_id else f"run-{uuid.uuid4().hex[:12]}"
+    if stored in _EVIDENCE_STORE and not run_id:
+        stored = f"run-{uuid.uuid4().hex[:12]}"  # never silently overwrite
+    _EVIDENCE_STORE[stored] = {
+        "episodes": evidence_by_episode,
+        "rows_ready": rows_ready,
+    }
+    while len(_EVIDENCE_STORE) > _EVIDENCE_STORE_MAX_RUNS:
+        _EVIDENCE_STORE.pop(next(iter(_EVIDENCE_STORE)))
+    return stored
+
+
+@mcp.tool()
+def get_episode_evidence(run_id: str, episode_id: str) -> dict:
+    """Full evidence for one episode from a previous
+    validate_and_filter_episodes run.
+
+    Use this when the compact summary of validate_and_filter_episodes flags
+    an episode you need to inspect: it returns the episode's verdict, failure
+    labels, every failed/warning check with details, the flagged sample
+    positions, and the first offending sample rows themselves.
+
+    run_id: the identifier returned by validate_and_filter_episodes.
+    episode_id: the episode to inspect (any episode from that run, including
+                training-ready ones).
+    """
+    run = _EVIDENCE_STORE.get(str(run_id))
+    if run is None:
+        raise ValueError(
+            f"Unknown run_id {run_id!r}. It may have expired from the evidence "
+            "store; re-run validate_and_filter_episodes to get a fresh run_id."
+        )
+    evidence = run["episodes"].get(str(episode_id))
+    if evidence is None:
+        known = ", ".join(sorted(run["episodes"])[:20])
+        raise ValueError(
+            f"run_id {run_id!r} has no episode {episode_id!r}. Episodes in this run: {known}"
+        )
+    return evidence
 
 
 @mcp.tool()

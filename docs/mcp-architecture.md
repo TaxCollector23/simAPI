@@ -40,14 +40,35 @@ failed checks, excluded rows, and episode summaries.
 ## Tools and data flow
 
 The tools validate episode rows, validate a CSV by local path, validate a
-recording by local path, export clean episodes, return default screening
-limits, and explain a check name. The CSV-path and recording-path tools are
-stdio-only. Streamable HTTP rejects both kinds of local path; its upload tool
-accepts base64 file content and a filename for supported `.parquet`, `.db3`,
-`.mcap`, or `.zip` recordings instead. Uploads are content-checked, written to
-a temporary directory for decoding, and removed when the tool call completes.
-HTTP uploads are limited to 3 MiB so base64 and MCP framing fit within the
-SDK's default request body ceiling.
+recording by local path, validate an uploaded recording, filter a dataset
+down to training-ready episodes, export clean episodes, return default
+screening limits, and explain a check name. The CSV-path and recording-path
+tools are stdio-only. Streamable HTTP rejects both kinds of local path; its
+upload tool accepts base64 file content and a filename for supported
+`.parquet`, `.db3`, `.mcap`, or `.zip` recordings instead. Uploads are
+content-checked, written to a temporary directory for decoding, and removed
+when the tool call completes. HTTP uploads are limited to 3 MiB so base64
+and MCP framing fit within the SDK's default request body ceiling.
+
+Every validate tool accepts the optional dynamics conditions alongside
+`max_time_step` / `velocity_tolerance`:
+
+- `chatter_min_frequency_hz` and `max_chatter_power_ratio` enable the FFT
+  actuator-chatter check on joint velocity signals.
+- `energy_anomaly_factor` enables the model-free energy-conservation check
+  on joint velocity plus torque/effort signals.
+
+Conditions are validated with actionable error messages (units, valid
+ranges, and what a good default is) before they reach the engine, and
+`explain_robotics_check` covers the dynamics check names so an agent can
+self-correct after a failure.
+
+`validate_and_filter_episodes` is the agent-facing dataset filter: it runs
+the full engine (limits, trajectory motion, chatter, energy conservation,
+and optional URDF forward kinematics) per episode and returns only the
+training-ready episode IDs, with a per-episode rejection breakdown and an
+aggregate `rejected_by_check` count. Episodes with any warning are not
+considered training-ready — the fail-closed convention.
 
 File row limits are enforced as input is read or decoded. CSV reading stops at
 the configured cap plus one row, which detects an oversized file without

@@ -96,6 +96,44 @@ same units as the limits; tolerances are absolute values in the corresponding
 velocity or acceleration units. Finite differences estimate interval-average
 motion, not peak velocity or acceleration. No joint-wrap convention is inferred.
 
+## Dynamics checks
+
+Two opt-in checks catch failure modes that static ranges and finite
+differences miss. Like the trajectory tolerances, they run only when their
+`conditions` keys are present, so existing reports are unchanged.
+
+- **Actuator chatter:** set `conditions.chatter_min_frequency_hz` and/or
+  `conditions.max_chatter_power_ratio` (default 0.25) on runs with joint
+  velocity signals. Simulated policies can show high-frequency control
+  oscillation that stays inside every joint limit yet damages real
+  actuators. Each episode window is flagged when more than the configured
+  fraction of its velocity spectral power (FFT) lies above the cutoff
+  frequency. Episodes without a time column, with non-uniform sampling
+  (intervals deviating more than 25% from the median), or with fewer than
+  16 samples are reported as not evaluated rather than silently passing.
+- **Energy conservation:** set `conditions.energy_anomaly_factor` (for
+  example 100) on runs with joint velocity and torque or effort signals.
+  The check verifies that kinetic-energy changes between samples are
+  explainable by mechanical work (`∫τ·q̇ dt`). It is model-free: without
+  URDF inertials the effective inertia is unknown, so a robust per-episode
+  linear fit calibrates the work/energy relationship (the intercept
+  absorbs constant unmodelled torques such as gravity). Intervals whose
+  residual kinetic-energy change exceeds the factor times the episode's
+  robust residual scale are flagged — the signature of physics-engine
+  contact-solver energy injection that passes range checks.
+
+Both checks appear in reports as `robotics_chatter:<signal>` and
+`robotics_energy:<joint>` entries, add `actuator_chatter` and
+`energy_anomaly` failure labels in Physical AI episode quality reports, and
+report their configuration in the `robotics_summary`.
+
+## Run the local dashboard
+
+The repository includes a same-origin browser dashboard backed by the Python
+API. From the repository root, run `./start.sh`, then open
+`http://127.0.0.1:8000`. The dashboard, health check, and API docs are served
+from the same local process at `/`, `/v1/health`, and `/docs`.
+
 Reports include `robotics_checks` and `robotics_summary`: the motion engine
 version, episode IDs, sample counts, duration when available, flagged samples,
 and assumptions. The playground can export a JSON report or complete unflagged

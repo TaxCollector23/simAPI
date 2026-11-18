@@ -264,11 +264,15 @@ export async function POST(req: Request) {
     }
   }
 
-  for (const key of ["max_time_step", "velocity_tolerance", "acceleration_tolerance"]) {
+  for (const key of ["max_time_step", "velocity_tolerance", "acceleration_tolerance", "chatter_min_frequency_hz", "energy_anomaly_factor"]) {
     const value = body.conditions?.[key];
     if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
       return NextResponse.json(errorBody("bad_request", `${key} must be a finite positive number.`, requestId), { status: 400 });
     }
+  }
+  const chatterRatio = body.conditions?.max_chatter_power_ratio;
+  if (chatterRatio !== undefined && (typeof chatterRatio !== "number" || !Number.isFinite(chatterRatio) || chatterRatio <= 0 || chatterRatio >= 1)) {
+    return NextResponse.json(errorBody("bad_request", "max_chatter_power_ratio must be a finite number between 0 and 1.", requestId), { status: 400 });
   }
 
   let result;

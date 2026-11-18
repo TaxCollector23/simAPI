@@ -48,6 +48,7 @@ __all__ = [
     "episode_quality",
     "check_stream_sync",
     "action_state_consistency",
+    "action_state_causality",
     "export_clean_dataset",
 ]
 
@@ -63,6 +64,14 @@ FAILURE_LABELS = (
     "inconsistent_velocity", # recorded velocity disagrees with the positions
     "kinematics_mismatch",   # reported end-effector position disagrees with URDF FK
     "kinematics_unavailable", # requested FK comparison could not evaluate every sample
+    "actuator_chatter",      # high-frequency velocity oscillation (spectral power check)
+    "energy_anomaly",        # kinetic-energy change no recorded effort can explain
+    "foot_slip",             # loaded foot sliding (contact-solver slip)
+    "timestamp_skew",        # camera/joint streams out of sync
+    "workspace_floor_violation", # FK places the tip below the workspace floor
+    "self_collision",        # link capsules closer than the clearance minimum
+    "dead_episode",          # barely any motion for the whole episode
+    "stall_torque",          # high torque while the joint does not move
 )
 
 EPISODE_KEYS = ("episode_id", "episode", "trajectory_id", "sequence_id")
@@ -240,7 +249,92 @@ _LABEL_BY_CHECK = (
     ("robotics_sample_gaps", "time_gap"),
     ("robotics_time_order", "time_disorder"),
     ("robotics_limit", "limit_violation"),
+    ("robotics_chatter", "actuator_chatter"),
+    ("robotics_energy", "energy_anomaly"),
+    ("robotics_foot_slip", "foot_slip"),
+    ("robotics_stream_skew", "timestamp_skew"),
+    ("robotics_workspace_floor", "workspace_floor_violation"),
+    ("robotics_self_collision", "self_collision"),
 )
+
+
+def _dead_episode_label(ep_rows: list[dict[str, Any]],
+                        min_active_motion_ratio: float) -> list[str]:
+    """An episode where almost no joint position ever changes is dead weight:
+    the policy produced nothing (or the recorder captured the wrong window),
+    and training on it teaches the model to do nothing. A step is "active"
+    when ANY joint position changes between consecutive samples; the episode
+    is flagged when the active fraction drops below the configured ratio."""
+    joint_cols = sorted({
+        k for row in ep_rows for k, v in row.items()
+        if k.startswith("joint") and k.endswith("_position") and _num(v) is not None
+    })
+    if not joint_cols:
+        return []
+    if len(ep_rows) < 2:
+        return ["dead_episode"]  # a single sample cannot demonstrate motion
+    active = 0
+    for pos in range(len(ep_rows) - 1):
+        for col in joint_cols:
+            first = _num(ep_rows[pos].get(col))
+            last = _num(ep_rows[pos + 1].get(col))
+            if first is not None and last is not None and abs(last - first) > 1e-9:
+                active += 1
+                break
+    if active / (len(ep_rows) - 1) < min_active_motion_ratio:
+        return ["dead_episode"]
+    return []
+
+
+def _stall_torque_label(ep_rows: list[dict[str, Any]],
+                        limits: dict[str, tuple[float, float]],
+                        max_stall_duration_s: float,
+                        stall_torque_fraction: float = 0.5) -> list[str]:
+    """A joint holding high torque while its position does not move is
+    stalled — pushing against an obstacle, a joint limit, or a wedged
+    gripper. Flag when any torque/effort signal stays above
+    `stall_torque_fraction` of its configured limit for more than
+    `max_stall_duration_s` while the matching position signal is frozen."""
+    time_key = next(
+        (key for row in ep_rows for key in row
+         if str(key).strip().lower() in TIME_KEYS),
+        None,
+    )
+    if time_key is None:
+        return []  # duration cannot be measured; base checks own time problems
+    times = [_num(row.get(time_key)) for row in ep_rows]
+    for column, (lo, hi) in limits.items():
+        if "torque" not in column and "effort" not in column:
+            continue
+        position_column = column.replace("torque", "position").replace("effort", "position")
+        if not any(position_column in row for row in ep_rows):
+            continue
+        threshold = stall_torque_fraction * max(abs(lo), abs(hi))
+        run_start: int | None = None
+        for pos in range(len(ep_rows)):
+            torque = _num(ep_rows[pos].get(column))
+            first = _num(ep_rows[pos].get(position_column))
+            stalled = (
+                torque is not None and abs(torque) >= threshold
+                and first is not None
+                and (pos == 0 or _num(ep_rows[pos - 1].get(position_column)) == first)
+            )
+            if stalled:
+                if run_start is None:
+                    run_start = pos
+                continue
+            if run_start is not None:
+                end_time, start_time = times[pos], times[run_start]
+                if end_time is not None and start_time is not None \
+                        and end_time - start_time > max_stall_duration_s:
+                    return ["stall_torque"]
+                run_start = None
+        if run_start is not None:
+            end_time, start_time = times[-1], times[run_start]
+            if end_time is not None and start_time is not None \
+                    and end_time - start_time > max_stall_duration_s:
+                return ["stall_torque"]
+    return []
 
 
 def _labels_from_checks(checks: list[dict[str, Any]]) -> list[str]:
@@ -260,7 +354,10 @@ def _labels_from_checks(checks: list[dict[str, Any]]) -> list[str]:
 
 def episode_quality(rows: list[dict[str, Any]],
                     robotics_limits: dict[str, tuple[float, float]] | None = None,
-                    conditions: dict[str, float] | None = None) -> dict[str, Any]:
+                    conditions: dict[str, float] | None = None,
+                    min_active_motion_ratio: float | None = None,
+                    max_stall_duration_s: float | None = None,
+                    stall_torque_fraction: float = 0.5) -> dict[str, Any]:
     """Score every episode in `rows`.
 
     rows: one dict per sample, like the rest of SimAPI:
@@ -269,12 +366,26 @@ def episode_quality(rows: list[dict[str, Any]],
     robotics_limits: allowed (min, max) per signal, the robot's own limits.
     conditions: passed through to the base checker (max_time_step,
           velocity_tolerance, acceleration_tolerance).
+    min_active_motion_ratio: opt-in dead-episode filter; flag episodes whose
+          fraction of motion-active steps (any joint position changing)
+          falls below this ratio in [0, 1].
+    max_stall_duration_s: opt-in stall filter; flag episodes where a torque
+          signal holds at least `stall_torque_fraction` of its configured
+          limit for longer than this duration while its joint is frozen.
+    stall_torque_fraction: fraction of the configured torque limit that
+          counts as "high torque" for the stall check (default 0.5).
 
     Returns {"episodes": [...], "verdict": ..., "summary": {...}} where each
     episode entry has: episode_id, samples, verdict, failure_labels,
     flagged_rows (positions in the original `rows` list), failed_checks,
     training_ready.
     """
+    if min_active_motion_ratio is not None and not 0 <= min_active_motion_ratio <= 1:
+        raise ValueError("min_active_motion_ratio must be between 0 and 1")
+    if max_stall_duration_s is not None and max_stall_duration_s <= 0:
+        raise ValueError("max_stall_duration_s must be a positive duration in seconds")
+    if not 0 < stall_torque_fraction <= 1:
+        raise ValueError("stall_torque_fraction must be in (0, 1]")
     limits = _clean_limits(robotics_limits)
     checked_conditions = _clean_conditions(conditions)
     if not rows:
@@ -302,8 +413,14 @@ def episode_quality(rows: list[dict[str, Any]],
             for c in report.get("checks", [])
         )
         labels = _labels_from_checks(report.get("checks", []))
-        for extra in (_torque_saturation_labels(ep_rows, limits)
-                      + _frozen_sensor_labels(ep_rows)):
+        extra_labels = _torque_saturation_labels(ep_rows, limits) + _frozen_sensor_labels(ep_rows)
+        if min_active_motion_ratio is not None:
+            extra_labels += _dead_episode_label(ep_rows, min_active_motion_ratio)
+        if max_stall_duration_s is not None:
+            extra_labels += _stall_torque_label(
+                ep_rows, limits, max_stall_duration_s, stall_torque_fraction
+            )
+        for extra in extra_labels:
             if extra not in labels:
                 labels.append(extra)
         local_excluded = sorted((report.get("excluded") or {}).keys())
@@ -480,12 +597,177 @@ def action_state_consistency(rows: list[dict[str, Any]],
 
 
 # --------------------------------------------------------------------------
+# 3b. action -> state causality and frame-shift (lag) detection
+# --------------------------------------------------------------------------
+
+def _pearson(xs: list[float], ys: list[float]) -> float | None:
+    n = len(xs)
+    if n < 3:
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    dx = [x - mean_x for x in xs]
+    dy = [y - mean_y for y in ys]
+    var_x = sum(d * d for d in dx)
+    var_y = sum(d * d for d in dy)
+    if var_x <= 0.0 or var_y <= 0.0:
+        return None
+    return sum(a * b for a, b in zip(dx, dy, strict=True)) / math.sqrt(var_x * var_y)
+
+
+def action_state_causality(rows: list[dict[str, Any]],
+                           action_col: str,
+                           state_col: str,
+                           max_lag: int = 3,
+                           min_correlation: float = 0.1,
+                           lag_margin: float = 0.02) -> dict[str, Any]:
+    """Does `action[t]` positively correlate with the velocity change that
+    follows it — and does it do so at lag 1?
+
+    For each candidate lag L in 1..max_lag the Pearson correlation between
+    action[t] and the delayed velocity change
+    Δv[t+L] = state[t+L] - 2*state[t+L-1] + state[t+L-2] is computed inside
+    each episode. A healthy recording peaks at lag 1 (the command moves the
+    very next step). Two failure modes are reported:
+
+      * no_causality  — no lag reaches `min_correlation`: the recorded
+        actions have no measurable effect on the state (mislabeled channels,
+        or the action column is not what it claims to be).
+      * lag_mismatch  — the best correlation sits at a lag other than 1 and
+        beats the lag-1 correlation by more than `lag_margin`: the streams
+        are shifted by (best_lag - 1) frames, the classic off-by-one
+        recorder bug that teaches a model the wrong cause and effect.
+
+    Returns {"verdict", "reason", "best_lag", "correlations_by_lag",
+    "flagged_rows", "count"}; flagged rows list the steps whose action
+    sign disagrees with the state change at the best lag (only when a
+    best lag exists).
+    """
+    if max_lag < 1:
+        raise ValueError("max_lag must be at least 1")
+    if not 0 <= min_correlation <= 1:
+        raise ValueError("min_correlation must be between 0 and 1")
+
+    actions: dict[int, float] = {}
+    states: dict[int, float] = {}
+    for index, row in enumerate(rows):
+        action = _num(row.get(action_col))
+        state = _num(row.get(state_col))
+        if action is not None:
+            actions[index] = action
+        if state is not None:
+            states[index] = state
+
+    pairs_by_lag: dict[int, list[tuple[float, float]]] = {lag: [] for lag in range(1, max_lag + 1)}
+    for _name, members in _group_episodes(rows):
+        positions = [idx for idx, _row in members if idx in states and idx in actions]
+        if len(positions) < 4:
+            continue
+        local = {idx: pos for pos, idx in enumerate(positions)}
+        for lag in range(1, max_lag + 1):
+            for idx in positions:
+                target = local[idx] + lag
+                if target >= len(positions) or local[idx] + lag - 2 < 0:
+                    continue
+                i1, i2, i3 = (positions[local[idx] + lag],
+                              positions[local[idx] + lag - 1],
+                              positions[local[idx] + lag - 2])
+                if i2 not in states or i3 not in states:
+                    continue
+                delta_v = states[i1] - 2.0 * states[i2] + states[i3]
+                pairs_by_lag[lag].append((actions[idx], delta_v))
+
+    correlations: dict[int, float | None] = {}
+    for lag in range(1, max_lag + 1):
+        pairs = pairs_by_lag[lag]
+        correlations[lag] = _pearson([a for a, _d in pairs], [d for _a, d in pairs]) if pairs else None
+
+    evaluated = {lag: value for lag, value in correlations.items() if value is not None}
+    if not evaluated:
+        return {
+            "verdict": "warning",
+            "reason": "insufficient_data",
+            "best_lag": None,
+            "correlations_by_lag": correlations,
+            "flagged_rows": [],
+            "count": 0,
+            "detail": (
+                "Action/state causality could not be evaluated: fewer than four aligned "
+                "action and state samples per episode."
+            ),
+        }
+
+    best_lag = max(evaluated, key=lambda lag: evaluated[lag])  # type: ignore[arg-type]
+    best_value = evaluated[best_lag]
+    if best_value < min_correlation:
+        verdict, reason = "failed", "no_causality"
+        detail = (
+            f"No lag in 1..{max_lag} correlates {action_col} with the following "
+            f"{state_col} velocity change above {min_correlation:g} (best: {best_value:.3f} at lag {best_lag})."
+        )
+    elif best_lag != 1 and best_value > (evaluated.get(1) or -1.0) + lag_margin:
+        verdict, reason = "failed", "lag_mismatch"
+        detail = (
+            f"{action_col} tracks the {state_col} velocity change best at lag {best_lag} "
+            f"(r={best_value:.3f}), not lag 1 (r={evaluated.get(1, float('nan')):.3f}): the streams "
+            f"are shifted by {best_lag - 1} frame(s)."
+        )
+    else:
+        verdict, reason = "passed", "causal_at_lag_1" if best_lag == 1 else "causal"
+        detail = (
+            f"{action_col} correlates with the following {state_col} velocity change at lag "
+            f"{best_lag} (r={best_value:.3f})."
+        )
+
+    flagged: list[int] = []
+    if verdict != "failed" and best_lag is not None:
+        for idx, _pair in _causality_flagged_rows(
+            rows, _group_episodes(rows), action_col, state_col, best_lag
+        ):
+            flagged.append(idx)
+
+    return {
+        "verdict": verdict,
+        "reason": reason,
+        "best_lag": best_lag,
+        "correlations_by_lag": correlations,
+        "flagged_rows": flagged,
+        "count": len(flagged),
+        "detail": detail,
+    }
+
+
+def _causality_flagged_rows(rows, groups, action_col, state_col, lag):
+    """Steps whose action sign disagrees with the delayed velocity change."""
+    for _name, members in groups:
+        aligned = [
+            (idx, _num(row.get(action_col)), _num(row.get(state_col)))
+            for idx, row in members
+            if _num(row.get(action_col)) is not None and _num(row.get(state_col)) is not None
+        ]
+        for pos in range(len(aligned) - lag):
+            first_pos = pos + lag - 2
+            if first_pos < 0:
+                continue
+            idx, action, _state = aligned[pos]
+            s1 = aligned[pos + lag][2]
+            s2 = aligned[pos + lag - 1][2]
+            s3 = aligned[first_pos][2]
+            delta_v = s1 - 2.0 * s2 + s3
+            if abs(action) > 1e-9 and abs(delta_v) > 1e-9 and (action > 0) != (delta_v > 0):
+                yield idx, (action, delta_v)
+
+
+# --------------------------------------------------------------------------
 # 4. clean export
 # --------------------------------------------------------------------------
 
 def export_clean_dataset(rows: list[dict[str, Any]],
                          robotics_limits: dict[str, tuple[float, float]] | None = None,
-                         conditions: dict[str, float] | None = None
+                         conditions: dict[str, float] | None = None,
+                         min_active_motion_ratio: float | None = None,
+                         max_stall_duration_s: float | None = None,
+                         stall_torque_fraction: float = 0.5
                          ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return (clean_rows, report): `rows` with every FAILING EPISODE
     removed whole.
@@ -495,10 +777,19 @@ def export_clean_dataset(rows: list[dict[str, Any]],
     its own kind of bad training data. One bad row -> the whole episode
     stays out (it can be repaired and re-checked separately).
 
+    The optional dead-episode (min_active_motion_ratio) and stall-torque
+    (max_stall_duration_s) filters pass through to episode_quality; every
+    failure tag they produce flows into the removal report below.
+
     report names each removed episode and its failure labels, so the
     removal is explainable, not silent.
     """
-    quality = episode_quality(rows, robotics_limits, conditions)
+    quality = episode_quality(
+        rows, robotics_limits, conditions,
+        min_active_motion_ratio=min_active_motion_ratio,
+        max_stall_duration_s=max_stall_duration_s,
+        stall_torque_fraction=stall_torque_fraction,
+    )
     bad_ids = {e["episode_id"] for e in quality["episodes"] if not e["training_ready"]}
     key = _episode_key_name(rows)
     clean_rows = [

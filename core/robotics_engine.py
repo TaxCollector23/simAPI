@@ -13,7 +13,21 @@ from typing import Any, Protocol
 
 import pandas as pd
 
-from core.kinematics import URDFGeometry, forward_kinematics, joint_signal_name, parse_urdf_geometry
+from core.dynamics_suites import (
+    ActuatorChatterSuite,
+    EnergyConservationSuite,
+    HumanoidContactSuite,
+)
+from core.kinematics import (
+    LinkCapsule,
+    URDFGeometry,
+    check_self_collision,
+    check_workspace_floor,
+    forward_kinematics,
+    joint_signal_name,
+    parse_link_capsules,
+    parse_urdf_geometry,
+)
 from core.robotics_evidence import build_evidence
 from core.robotics_trajectory import GROUP_KEYS, TIME_KEYS, analyze_trajectories, normalize, number
 
@@ -160,21 +174,37 @@ class KinematicsSuite:
         joint_signal_map: dict[str, str] | None = None,
         tolerance_m: float = 0.01,
         max_evaluations: int = 10_000,
+        min_workspace_z: float | None = None,
+        min_self_collision_clearance_m: float | None = None,
+        link_capsules: dict[str, LinkCapsule] | None = None,
     ) -> None:
         if isinstance(urdf_geometry, str):
+            self.urdf_xml = urdf_geometry
             urdf_geometry = parse_urdf_geometry(urdf_geometry)
+        else:
+            self.urdf_xml = None
         if not isinstance(urdf_geometry, URDFGeometry):
             raise TypeError("urdf_geometry must be URDFGeometry or URDF XML text")
         if not math.isfinite(tolerance_m) or tolerance_m < 0:
             raise ValueError("tolerance_m must be finite and non-negative")
         if isinstance(max_evaluations, bool) or not isinstance(max_evaluations, int) or max_evaluations < 1:
             raise ValueError("max_evaluations must be a positive integer")
+        if min_workspace_z is not None and not math.isfinite(min_workspace_z):
+            raise ValueError("min_workspace_z must be a finite height in meters")
+        if (
+            min_self_collision_clearance_m is not None
+            and (not math.isfinite(min_self_collision_clearance_m) or min_self_collision_clearance_m < 0)
+        ):
+            raise ValueError("min_self_collision_clearance_m must be finite and non-negative")
         self.urdf_geometry = urdf_geometry
         self.joint_signal_map = {
             str(joint): normalize(str(signal)) for joint, signal in (joint_signal_map or {}).items()
         }
         self.tolerance_m = float(tolerance_m)
         self.max_evaluations = max_evaluations
+        self.min_workspace_z = min_workspace_z
+        self.min_self_collision_clearance_m = min_self_collision_clearance_m
+        self.link_capsules = dict(link_capsules) if link_capsules else {}
 
     def run(self, context: RoboticsValidationContext) -> RoboticsSuiteResult:
         columns = {normalize(str(column)) for column in context.data.columns}
@@ -285,7 +315,11 @@ class KinematicsSuite:
                 ),
             })
         if not evaluated:
-            return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary)
+            return RoboticsSuiteResult(
+                checks=checks + self._geometry_checks(rows, joint_signals, summary, excluded),
+                excluded=excluded,
+                summary=summary,
+            )
         count_failed = len(failed_indices)
         status = "failed" if count_failed else "passed"
         detail = (
@@ -303,20 +337,158 @@ class KinematicsSuite:
             "violations": count_failed,
             "detail": detail,
         })
-        return RoboticsSuiteResult(checks=checks, excluded=excluded, summary=summary, evidence=evidence)
+        return RoboticsSuiteResult(
+            checks=checks + self._geometry_checks(rows, joint_signals, summary, excluded),
+            excluded=excluded,
+            summary=summary,
+            evidence=evidence,
+        )
+
+    def _geometry_checks(
+        self,
+        rows: list[dict[str, Any]],
+        joint_signals: dict[str, str],
+        summary: dict[str, Any],
+        excluded: dict[int, list[str]],
+    ) -> list[dict[str, Any]]:
+        """Workspace-floor and capsule self-collision checks (opt-in).
+
+        These run on every row whose joint positions are present, independent
+        of whether end-effector columns exist: a geometry can obey all joint
+        limits and still clip through the floor or the robot's own torso.
+        """
+        checks: list[dict[str, Any]] = []
+        if self.min_workspace_z is None and self.min_self_collision_clearance_m is None:
+            return checks
+
+        samples: list[dict[str, float]] = []
+        missing = False
+        for row in rows:
+            sample: dict[str, float] = {}
+            for signal in joint_signals.values():
+                value = number(row.get(signal))
+                if value is None:
+                    missing = True
+                    break
+                sample[signal] = value
+            if missing:
+                break
+            samples.append(sample)
+
+        if not samples:
+            checks.append({
+                "name": "robotics_geometry:not_evaluated",
+                "column": None,
+                "status": "warning",
+                "indices": [],
+                "violations": 0,
+                "detail": (
+                    "Workspace floor / self-collision checking was requested but joint "
+                    "position signals are missing or non-finite."
+                ),
+                "low": None,
+                "high": None,
+            })
+            return checks
+
+        if self.min_workspace_z is not None:
+            floor = check_workspace_floor(self.urdf_geometry, samples, self.min_workspace_z, joint_signals)
+            bad = floor["violations"]
+            checks.append({
+                "name": f"robotics_workspace_floor:{self.urdf_geometry.tip_link}",
+                "column": "end_effector_z",
+                "status": "failed" if bad else "passed",
+                "low": self.min_workspace_z,
+                "high": None,
+                "indices": bad,
+                "violations": len(bad),
+                "detail": (
+                    f"{len(bad)} sample(s) place the {self.urdf_geometry.tip_link} at z below the "
+                    f"{self.min_workspace_z:g} m workspace floor (minimum reached: {floor['min_tip_z']:.6g} m)."
+                    if bad
+                    else f"All samples keep the {self.urdf_geometry.tip_link} at or above the "
+                         f"{self.min_workspace_z:g} m workspace floor (minimum reached: {floor['min_tip_z']:.6g} m)."
+                ),
+            })
+            summary["workspace_floor_violations"] = len(bad)
+            summary["min_tip_z_m"] = floor["min_tip_z"]
+            for index in bad:
+                excluded[index] = [
+                    f"URDF forward kinematics places the tip below the {self.min_workspace_z:g} m workspace floor"
+                ]
+
+        if self.min_self_collision_clearance_m is not None:
+            capsules = self.link_capsules or (
+                parse_link_capsules(self.urdf_xml) if self.urdf_xml else {}
+            )
+            if not capsules:
+                checks.append({
+                    "name": "robotics_self_collision:not_evaluated",
+                    "column": None,
+                    "status": "warning",
+                    "indices": [],
+                    "violations": 0,
+                    "detail": (
+                        "Self-collision checking was requested but the URDF declares no "
+                        "cylinder/capsule collision geometry for the chain links."
+                    ),
+                    "low": None,
+                    "high": None,
+                })
+            else:
+                collision = check_self_collision(
+                    self.urdf_geometry, capsules, samples,
+                    self.min_self_collision_clearance_m, joint_signals,
+                )
+                bad = collision["violations"]
+                indices = sorted(bad)
+                checks.append({
+                    "name": "robotics_self_collision:link_capsules",
+                    "column": None,
+                    "status": "failed" if bad else "passed",
+                    "low": self.min_self_collision_clearance_m,
+                    "high": None,
+                    "indices": indices,
+                    "violations": len(indices),
+                    "detail": (
+                        f"{len(indices)} sample(s) bring non-adjacent link capsules closer than "
+                        f"{self.min_self_collision_clearance_m:g} m (minimum gap: {collision['min_clearance_m']:.6g} m)."
+                        if bad
+                        else f"All samples keep non-adjacent link capsules at least "
+                             f"{self.min_self_collision_clearance_m:g} m apart (minimum gap: {collision['min_clearance_m']:.6g} m)."
+                    ),
+                })
+                summary["self_collision_violations"] = len(indices)
+                summary["min_self_collision_clearance_m"] = collision["min_clearance_m"]
+                for index in indices:
+                    excluded[index] = [
+                        f"non-adjacent link capsules closer than {self.min_self_collision_clearance_m:g} m "
+                        f"({', '.join(bad[index])})"
+                    ]
+        return checks
 
 
 class RoboticsValidationEngine:
     """Run an ordered collection of checks and assemble a stable report.
 
-    The default suite list contains scalar-limit and trajectory checks. A
+    The default suite list contains scalar-limit and trajectory checks plus
+    the opt-in dynamics suites (actuator chatter and energy conservation),
+    which only report when their ``conditions`` keys are present. A
     caller can supply an ordered replacement list or append custom suites to
     the default list. Suite order is observable in the returned check list.
     """
 
     def __init__(self, suites: list[RoboticsCheckSuite] | None = None) -> None:
         self.suites: list[RoboticsCheckSuite] = (
-            list(suites) if suites is not None else [SignalLimitsSuite(), TrajectorySuite()]
+            list(suites)
+            if suites is not None
+            else [
+                SignalLimitsSuite(),
+                TrajectorySuite(),
+                ActuatorChatterSuite(),
+                EnergyConservationSuite(),
+                HumanoidContactSuite(),
+            ]
         )
 
     def validate(

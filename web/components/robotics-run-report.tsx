@@ -110,6 +110,62 @@ export function RoboticsRunReport({
           </div>
         ))}
       </div>
+      {(summary.actuator_chatter?.enabled || summary.energy_conservation?.enabled) && (
+        <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+          <h3 className="text-base font-medium text-white">Dynamics checks</h3>
+          <p className="mt-1 text-xs text-white/45">
+            Spectral and energy checks that catch failure modes static ranges miss.
+          </p>
+          <div className="mt-3 grid gap-2 text-sm text-white/65 sm:grid-cols-2">
+            {summary.actuator_chatter?.enabled && (
+              <div className="rounded-lg border border-white/[0.06] p-3">
+                <p className="font-medium text-white/75">Actuator chatter (FFT)</p>
+                <p className="mt-1 text-xs">
+                  {summary.actuator_chatter.evaluated_signals} velocity signal(s) evaluated
+                  {typeof summary.actuator_chatter.max_power_ratio === "number"
+                    ? ` · max power ratio ${summary.actuator_chatter.max_power_ratio}`
+                    : ""}
+                  {typeof summary.actuator_chatter.min_frequency_hz === "number"
+                    ? ` · above ${summary.actuator_chatter.min_frequency_hz} Hz`
+                    : ""}
+                </p>
+                {!!summary.actuator_chatter.skipped_episodes && Object.keys(summary.actuator_chatter.skipped_episodes).length > 0 && (
+                  <p className="mt-1 text-xs text-amber-400/80">
+                    Not evaluated episodes:{" "}
+                    {Object.entries(summary.actuator_chatter.skipped_episodes)
+                      .map(([reason, count]) => `${reason.replaceAll("_", " ")} ×${count}`)
+                      .join(", ")}
+                  </p>
+                )}
+              </div>
+            )}
+            {summary.energy_conservation?.enabled && (
+              <div className="rounded-lg border border-white/[0.06] p-3">
+                <p className="font-medium text-white/75">Energy conservation</p>
+                <p className="mt-1 text-xs">
+                  {summary.energy_conservation.evaluated_signals} joint(s) evaluated
+                  {typeof summary.energy_conservation.anomaly_factor === "number"
+                    ? ` · anomaly factor ${summary.energy_conservation.anomaly_factor}`
+                    : ""}
+                </p>
+              </div>
+            )}
+          </div>
+          {(result.robotics_checks ?? [])
+            .filter(
+              (check) =>
+                check.name.startsWith("robotics_chatter") ||
+                check.name.startsWith("robotics_energy"),
+            )
+            .some((check) => check.status === "failed") && (
+            <p className="mt-3 text-xs text-red-400">
+              Dynamics finding: flagged windows or intervals are listed in the check
+              details above. Chatter burns actuators; unexplained energy spikes mean
+              the simulation — not the data — needs fixing.
+            </p>
+          )}
+        </div>
+      )}
       {!!result.robotics_evidence?.length && (
         <div className="mt-6">
           <h3 className="text-base font-medium">Finding evidence</h3>
