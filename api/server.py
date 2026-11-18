@@ -124,9 +124,37 @@ def _validate_robotics_limits(value: dict[str, tuple[float, float]]):
 
 
 def _validate_trajectory_options(value: dict[str, float]):
-    for key in ("max_time_step", "velocity_tolerance", "acceleration_tolerance"):
-        if key in value and (not math.isfinite(value[key]) or value[key] <= 0):
+    for key in (
+        "max_time_step",
+        "velocity_tolerance",
+        "acceleration_tolerance",
+        "chatter_min_frequency_hz",
+    ):
+        item = value.get(key)
+        if item is not None and (
+            isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or item <= 0
+        ):
             raise ValueError(f"{key} must be a finite positive number")
+    energy_factor = value.get("energy_anomaly_factor")
+    if energy_factor is not None and (
+        isinstance(energy_factor, bool)
+        or not isinstance(energy_factor, (int, float))
+        or not math.isfinite(energy_factor)
+        or energy_factor <= 1
+    ):
+        raise ValueError("energy_anomaly_factor must be a finite number greater than 1")
+    ratio = value.get("max_chatter_power_ratio")
+    if ratio is not None and (not math.isfinite(ratio) or not 0 < ratio < 1):
+        raise ValueError("max_chatter_power_ratio must be a finite number between 0 and 1")
+    for key in ("max_foot_slip_mps", "max_foot_slip_ms", "min_foot_contact_force_n", "max_sync_skew_ms"):
+        item = value.get(key)
+        if item is not None and (
+            isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or item < 0
+        ):
+            unit = "speed in m/s" if key.startswith("max_foot_slip") else "non-negative value"
+            raise ValueError(f"{key} must be a finite non-negative {unit}")
+    if "min_foot_contact_force_n" in value and not ({"max_foot_slip_mps", "max_foot_slip_ms"} & value.keys()):
+        raise ValueError("min_foot_contact_force_n requires max_foot_slip_mps")
     return value
 
 
@@ -1577,6 +1605,31 @@ async def _validate_core(req: ValidateRequest) -> dict[str, Any]:
     return result
 
 
+_ROBOTICS_CHECK_HUMAN_NAMES = {
+    "robotics_limit": "A signal left its allowed range",
+    "robotics_derived_limit": "Motion implied by positions breaks a configured limit",
+    "robotics_consistency": "Recorded velocity/acceleration disagrees with the motion between samples",
+    "robotics_time_order": "Timestamps go backwards or repeat inside an episode",
+    "robotics_sample_gaps": "Silent sampling gap larger than the maximum time step",
+    "robotics_time_coverage": "No usable time column — motion checks did not run",
+    "robotics_chatter": "High-frequency velocity oscillation (actuator chatter) detected",
+    "robotics_energy": "Kinetic-energy change not explained by recorded effort",
+    "robotics_kinematics": "Reported end-effector position disagrees with URDF kinematics",
+    "robotics_unprofiled_signal": "Screening defaults used — supply the robot's real limits",
+    "robotics_not_evaluated": "A requested check could not be evaluated (fail-closed)",
+}
+
+
+def _robotics_check_human_name(check: dict[str, Any]) -> str:
+    """Actionable display name for a robotics check, used by dashboards and SDKs."""
+    name = str(check.get("name", ""))
+    for prefix, text in _ROBOTICS_CHECK_HUMAN_NAMES.items():
+        if name.startswith(prefix):
+            column = check.get("column")
+            return f"{text}: {column}" if column and ":" in name else text
+    return f"Robot data check failed: {check.get('column')}"
+
+
 def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> dict[str, Any]:
     """Promote manipulation-arm limits into the verdict returned by every client."""
     checks = robotics["checks"]
@@ -1636,7 +1689,7 @@ def _merge_robotics_limits(result: dict[str, Any], robotics: dict[str, Any]) -> 
             continue
         result["issues"].append({
             "name": check["name"],
-            "human_name": check.get("human_name", f"Robot data check failed: {check['column']}"),
+            "human_name": check.get("human_name", _robotics_check_human_name(check)),
             "status": check["status"],
             "description": check.get("description", f"{check['column']} must remain within its configured range"),
             "detail": check["detail"],

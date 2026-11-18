@@ -13,6 +13,19 @@ export interface RoboticsSummary {
   time_column: string | null;
   episode_column: string | null;
   assumptions: string[];
+  /** Dynamics suite coverage (present when conditions requested the checks). */
+  actuator_chatter?: {
+    enabled: boolean;
+    evaluated_signals: number;
+    max_power_ratio?: number;
+    min_frequency_hz?: number | string;
+    skipped_episodes?: Record<string, number>;
+  };
+  energy_conservation?: {
+    enabled: boolean;
+    evaluated_signals: number;
+    anomaly_factor?: number;
+  };
 }
 const normalize = (key: string) => key.trim().toLowerCase().replace(/[ .-]/g, "_");
 function numeric(value: unknown): number | null {

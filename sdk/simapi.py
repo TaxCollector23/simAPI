@@ -293,11 +293,79 @@ class SimAPI:
         client = SimAPI(api_key="sk_live_...")
         result = client.validate("simulation.json", simulation_type="aerodynamics")
         print(result.status)
+
+    ``mode="local"`` runs the robotics validation engine in-process — for
+    teams inside air-gapped VPCs where no HTTP hop to a hosted API is
+    possible or permitted:
+
+        client = SimAPI(mode="local")
+        result = client.validate(rows, simulation_type="robotics",
+                                 robotics_limits={"joint_1_position": (-1.57, 1.57)})
+
+    Local mode supports the robotics simulation type (the
+    ``RoboticsValidationEngine``); other simulation families still require
+    the hosted API.
     """
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None,
+                 mode: str = "remote"):
+        if mode not in ("remote", "local"):
+            raise ValueError("mode must be 'remote' or 'local'")
+        self.mode = mode
         self.api_key = api_key or API_KEY
         self.base_url = (base_url or API_BASE).rstrip("/")
+        self._local_engine = None
+
+    # -- local (air-gapped) execution --------------------------------------
+
+    def _local_validate(self, records, robotics_limits, conditions, job_id):
+        """Run the robotics engine in-process and wrap the report."""
+        import time as _time
+        import uuid as _uuid
+
+        try:
+            from core.robotics_validation import check_robotics_limits
+        except ImportError:  # sdk used from an installed package layout
+            from simapi.core.robotics_validation import check_robotics_limits  # type: ignore[no-redef]
+
+        frame = records if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
+        started = _time.perf_counter()
+        report = check_robotics_limits(
+            frame,
+            {k: tuple(v) for k, v in (robotics_limits or {}).items()},
+            source_rows=frame.to_dict(orient="records"),
+            conditions=dict(conditions or {}),
+        )
+        elapsed_ms = (_time.perf_counter() - started) * 1000.0
+        checks = report.get("checks", [])
+        excluded = report.get("excluded", {})
+        failed = [c for c in checks if c.get("status") == "failed"]
+        warned = [c for c in checks if c.get("status") == "warning"]
+        status = "failed" if failed else "warning" if warned else "passed"
+        n_rows = len(frame)
+        payload = {
+            "job_id": job_id or f"local-{_uuid.uuid4().hex[:12]}",
+            "status": status,
+            "confidence": {"passed": "high", "warning": "medium", "failed": "low"}[status],
+            "trials_submitted": n_rows,
+            "trials_valid": n_rows - len(excluded),
+            "trials_excluded": len(excluded),
+            "exclusion_rate": (len(excluded) / n_rows) if n_rows else 1.0,
+            "training_ready": status == "passed",
+            "processing_ms": elapsed_ms,
+            "warnings": len(warned),
+            "exclusions": [
+                {"row": int(row), "reasons": reasons} for row, reasons in excluded.items()
+            ],
+            "physics_checks": [
+                {"name": c.get("name", ""), "status": c.get("status", ""),
+                 "description": "", "detail": c.get("detail", ""), "value": c.get("low")}
+                for c in checks
+            ],
+            "statistics": {},
+            "provenance": {"mode": "local", "engine": "RoboticsValidationEngine"},
+        }
+        return ValidationResult(payload)
 
     def validate(
         self,
@@ -309,6 +377,13 @@ class SimAPI:
     ) -> ValidationResult:
         """Validate simulation data. Accepts a file path, list, DataFrame, or array."""
         records = _load_data(data)
+        if self.mode == "local":
+            if simulation_type != "robotics":
+                raise ValueError(
+                    "Local mode executes the robotics validation engine; "
+                    f"simulation_type {simulation_type!r} requires the hosted API."
+                )
+            return self._local_validate(records, robotics_limits, conditions, job_id)
         payload = {
             "data": records,
             "simulation_type": simulation_type,
@@ -328,6 +403,12 @@ class SimAPI:
             raise RuntimeError(_format_error(response))
         return ValidationResult(response.json())
 
+    def health(self) -> dict:
+        """Server health and facts (local mode reports the in-process engine)."""
+        if self.mode == "local":
+            return {"status": "ok", "mode": "local", "engine": "RoboticsValidationEngine"}
+        return requests.get(f"{self.base_url}/v1/health", timeout=10).json()
+
     def demo(self) -> ValidationResult:
         """Validate seeded synthetic data."""
         response = requests.post(
@@ -338,17 +419,15 @@ class SimAPI:
         return ValidationResult(response.json())
 
     def get_job(self, job_id: str) -> ValidationResult:
-        """Retrieve a previous job result by id."""
+        """Retrieve a previous job result by id (hosted mode only)."""
+        if self.mode == "local":
+            raise NotImplementedError("get_job requires the hosted API; local mode keeps no job store.")
         response = requests.get(
             f"{self.base_url}/v1/job/{job_id}", headers=_auth_headers(self.api_key), timeout=10
         )
         if response.status_code == 404:
             raise ValueError(f"Job {job_id} not found")
         return ValidationResult(response.json())
-
-    def health(self) -> dict:
-        """Server health and facts."""
-        return requests.get(f"{self.base_url}/v1/health", timeout=10).json()
 
 
 # ── Error helper ───────────────────────────────────────────────────────────────
@@ -405,3 +484,143 @@ def _load_data(data) -> list[dict]:
             return pd.read_csv(path).to_dict(orient="records")
 
     raise TypeError(f"Unsupported data type: {type(data)}")
+
+
+# ── Inline quarantine watcher ──────────────────────────────────────────────────
+
+class SimAPIWatcher:
+    """Air-gapped batch watcher: validate Parquet/Arrow episode batches,
+    quarantine failing episodes, and emit a ranked bug heatmap.
+
+    Designed for data pipelines that run inside a VPC with no route to the
+    hosted API. Each batch file is loaded as a DataFrame (PyArrow) and each
+    episode is validated with the same engine the hosted service uses, so a
+    quarantined episode here is a rejected episode everywhere.
+
+    profile: {"robotics_limits": {...}, "conditions": {...},
+              "min_active_motion_ratio": 0.1, "max_stall_duration_s": 2.0}
+             — every key optional; conditions reach the chatter/energy/
+             humanoid-contact suites exactly like the API.
+    quarantine_dir: where failing episodes are written (one Parquet file per
+             episode) and where sim_bug_heatmap.json lands on close.
+
+    Example:
+        with SimAPIWatcher(profile, "/data/quarantine") as watcher:
+            for batch in Path("/data/episodes").glob("*.parquet"):
+                watcher.process_batch(batch)
+        # -> /data/quarantine/sim_bug_heatmap.json ranks failure causes
+    """
+
+    HEATMAP_NAME = "sim_bug_heatmap.json"
+
+    def __init__(self, profile: dict | None = None, quarantine_dir: str | Path = "."):
+        self.profile = dict(profile or {})
+        self.quarantine_dir = Path(quarantine_dir)
+        self._heatmap: dict[str, dict[str, int]] = {}
+        self._batches: dict[str, dict] = {}
+
+    # -- context manager -----------------------------------------------------
+
+    def __enter__(self) -> "SimAPIWatcher":
+        self.quarantine_dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> bool:
+        self.write_heatmap()
+        return False
+
+    # -- validation ----------------------------------------------------------
+
+    def process_batch(self, batch) -> dict:
+        """Validate one batch (path or DataFrame); quarantine failing episodes.
+
+        Returns a per-batch summary: {"file", "episodes", "clean", "quarantined",
+        "rows_in", "rows_quarantined", "clean_dataframe"} where clean_dataframe
+        holds the surviving rows for the next pipeline stage.
+        """
+        if isinstance(batch, (str, Path)):
+            path = Path(batch)
+            frame = pd.read_parquet(path)
+            name = path.name
+        else:
+            frame = batch.copy()
+            name = f"batch-{len(self._batches) + 1}"
+
+        episode_column = next(
+            (column for column in ("episode_id", "episode", "trajectory_id", "sequence_id")
+             if column in frame.columns),
+            None,
+        )
+        if episode_column is None:
+            raise ValueError(
+                f"Batch {name!r} has no episode column (episode_id/episode/"
+                "trajectory_id/sequence_id); the watcher quarantines per episode."
+            )
+
+        try:
+            from core.physical_ai import episode_quality
+        except ImportError:
+            from simapi.core.physical_ai import episode_quality  # type: ignore[no-redef]
+
+        rows = frame.to_dict(orient="records")
+        quality = episode_quality(
+            rows,
+            self.profile.get("robotics_limits"),
+            self.profile.get("conditions"),
+            min_active_motion_ratio=self.profile.get("min_active_motion_ratio"),
+            max_stall_duration_s=self.profile.get("max_stall_duration_s"),
+        )
+
+        bad_ids: set[str] = set()
+        for episode in quality["episodes"]:
+            if episode["training_ready"]:
+                continue
+            bad_ids.add(episode["episode_id"])
+            for label in episode["failure_labels"] or ["unspecified"]:
+                entry = self._heatmap.setdefault(label, {"episodes": 0, "samples": 0})
+                entry["episodes"] += 1
+                entry["samples"] += int(episode["samples"])
+            for check in episode["failed_checks"]:
+                entry = self._heatmap.setdefault(check["name"], {"episodes": 0, "samples": 0})
+                entry["episodes"] += 1
+                entry["samples"] += int(episode["samples"])
+
+        quarantined_frame = frame[frame[episode_column].astype(str).isin(bad_ids)]
+        clean_frame = frame[~frame[episode_column].astype(str).isin(bad_ids)]
+        for episode_id in sorted(bad_ids):
+            episode_frame = quarantined_frame[quarantined_frame[episode_column].astype(str) == episode_id]
+            safe = str(episode_id).replace("/", "_").replace("\\", "_") or "unnamed"
+            episode_frame.to_parquet(self.quarantine_dir / f"episode_{safe}.parquet", index=False)
+
+        summary = {
+            "file": name,
+            "episodes": len(quality["episodes"]),
+            "clean": len(quality["episodes"]) - len(bad_ids),
+            "quarantined": len(bad_ids),
+            "rows_in": len(frame),
+            "rows_quarantined": int(len(quarantined_frame)),
+            "clean_dataframe": clean_frame,
+        }
+        self._batches[name] = {key: value for key, value in summary.items() if key != "clean_dataframe"}
+        return summary
+
+    # -- heatmap -------------------------------------------------------------
+
+    def heatmap(self) -> dict:
+        """Failure causes ranked by episode count (the 'sim bug heatmap')."""
+        ranked = dict(
+            sorted(self._heatmap.items(), key=lambda item: (-item[1]["episodes"], -item[1]["samples"], item[0]))
+        )
+        return ranked
+
+    def write_heatmap(self, path: str | Path | None = None) -> Path:
+        """Write the ranked heatmap JSON; returns its path."""
+        target = Path(path) if path else self.quarantine_dir / self.HEATMAP_NAME
+        target.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_by": "SimAPIWatcher",
+            "batches_processed": len(self._batches),
+            "ranked_failure_causes": self.heatmap(),
+        }
+        target.write_text(json.dumps(payload, indent=2, sort_keys=False))
+        return target

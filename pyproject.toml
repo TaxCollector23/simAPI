@@ -28,6 +28,12 @@ dependencies = [
     'tomli>=2.0; python_version < "3.11"',
 ]
 
+[project.scripts]
+simapi = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli"]
+
 [project.optional-dependencies]
 robotics-data = ["pyarrow", "rosbags", "huggingface-hub"]
 
