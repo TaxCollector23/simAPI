@@ -373,7 +373,7 @@ test("CLI profiles/import/CI gating/comparison/repair work together without chan
   assert.equal(JSON.parse(r.out).repaired_samples, 2);
   assert.match(await readFile(broken, "utf8"), /a,0,0\na,0,0/);
   r = await cli(["repair", broken, "--apply", "--output", broken], env);
-  assert.equal(r.code, 1);
+  assert.equal(r.code, 2);
   assert.match(await readFile(broken, "utf8"), /a,0,0\na,0,0/);
 });
 

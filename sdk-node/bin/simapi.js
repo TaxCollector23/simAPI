@@ -1,70 +1,38 @@
 #!/usr/bin/env node
-/**
- * SimAPI CLI.
- *
- * Node 18+ CLI with local ROS and URDF readers. The hosted API is
- * open by default -- no account or sign-in required. An API key is only
- * relevant if you're running your own deployment with SIMAPI_API_KEYS set.
- *   init · validate · watch · usage ·
- *   api-key {show,set,generate,delete} · config [set] · doctor · version · help
- */
-import { readFile, writeFile, mkdir, stat, readdir, unlink } from "node:fs/promises";
-import { watch as fsWatch, existsSync } from "node:fs";
+import { access, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from "node:fs/promises";
+import { constants, existsSync, readFileSync, watch as fsWatch } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join, basename, extname } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { env, platform, stderr, stdin, stdout } from "node:process";
 import { validateProfile, parseCsvDocument, inspectRows, toCsv, repairPreview, compareReports, githubAnnotations } from "../lib/robotics-workflow.js";
 import { resolveFtcProfile } from "../lib/ftc-frc.js";
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout, platform, env } from "node:process";
-import { exec } from "node:child_process";
 
-const VERSION = "1.1.3";
+const { version: VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const WEB_BASE = env.SIMAPI_WEB_URL || "https://simapilander.vercel.app";
-const API_BASE = env.SIMAPI_BASE_URL || "https://simapilander.vercel.app/api";
+const API_BASE = (env.SIMAPI_BASE_URL || "https://simapilander.vercel.app/api").replace(/\/+$/, "");
 const CONFIG_DIR = env.SIMAPI_CONFIG_DIR || join(homedir(), ".simapi");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 const USAGE_PATH = join(CONFIG_DIR, "usage.json");
 const LAST_RUN_PATH = join(CONFIG_DIR, "last_run.json");
 
-// ── Colors ────────────────────────────────────────────────────────────────────
-const COLOR = stdout.isTTY && !env.NO_COLOR && env.TERM !== "dumb";
-const rgb = (r, g, b, s) => (COLOR ? `\x1b[38;2;${r};${g};${b}m${s}\x1b[0m` : s);
-const c = {
-  dim: (s) => (COLOR ? `\x1b[2m${s}\x1b[0m` : s),
-  bold: (s) => (COLOR ? `\x1b[1m${s}\x1b[0m` : s),
-  cyan: (s) => rgb(169, 86, 36, s),
-  blue: (s) => rgb(169, 86, 36, s),
-  green: (s) => rgb(56, 102, 77, s),
-  red: (s) => rgb(161, 60, 50, s),
-  amber: (s) => rgb(134, 83, 0, s),
-  white: (s) => (COLOR ? `\x1b[97m${s}\x1b[0m` : s),
-};
-
-// ── Startup banner ──────────────────────────────────────────────────────────────
-const ART = [
-  "███████╗██╗███╗   ███╗ █████╗ ██████╗ ██╗",
-  "██╔════╝██║████╗ ████║██╔══██╗██╔══██╗██║",
-  "███████╗██║██╔████╔██║███████║██████╔╝██║",
-  "╚════██║██║██║╚██╔╝██║██╔══██║██╔═══╝ ██║",
-  "███████║██║██║ ╚═╝ ██║██║  ██║██║     ██║",
-  "╚══════╝╚═╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝",
-];
-function banner() {
-  const width = stdout.columns || 80;
-  const artWidth = Math.max(...ART.map((l) => [...l].length));
-  const pad = width >= artWidth ? " ".repeat(Math.floor((width - artWidth) / 2)) : "";
-  const line = (s) => (width >= artWidth ? pad + s : s); // never wrap; left-align when narrow
-
-  stdout.write("\n");
-  ART.forEach((row) => stdout.write(line(rgb(169, 86, 36, row)) + "\n"));
-  const title = `SimAPI CLI v${VERSION}`;
-  const tag = "Robotics validation for trajectories and training data.";
-  const centerText = (s) => (width >= s.length ? " ".repeat(Math.floor((width - s.length) / 2)) + s : s);
-  stdout.write("\n" + centerText(c.bold(c.white(title))) + "\n");
-  stdout.write(centerText(c.dim(tag)) + "\n\n");
+function paint(stream) {
+  const color = stream.isTTY && !("NO_COLOR" in env) && env.TERM !== "dumb";
+  const style = (code) => (value) => color ? `\x1b[${code}m${value}\x1b[0m` : value;
+  return {
+    dim: style("2"),
+    bold: style("1"),
+    accent: style("38;2;169;86;36"), // Landing page amber (#a95624).
+    green: style("38;2;56;102;77"),
+    red: style("38;2;161;60;50"),
+    amber: style("38;2;134;83;0"),
+  };
 }
 
-// ── Config / usage stores ────────────────────────────────────────────────────────
+const c = paint(stdout);
+const diagnostic = paint(stderr);
+
 async function readJson(path, fallback = {}) {
   try {
     return JSON.parse(await readFile(path, "utf8"));
@@ -72,18 +40,43 @@ async function readJson(path, fallback = {}) {
     return fallback;
   }
 }
-async function writeJson(path, obj) {
-  if (!existsSync(CONFIG_DIR)) await mkdir(CONFIG_DIR, { recursive: true });
-  await writeFile(path, JSON.stringify(obj, null, 2));
+
+async function readSettings(path) {
+  try {
+    const value = JSON.parse(await readFile(path, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a JSON object.");
+    return value;
+  } catch (error) {
+    if (error.code === "ENOENT") return {};
+    throw new Error(`Could not read settings from ${path}. Check that it is a readable JSON object.`);
+  }
 }
-const readConfig = () => readJson(CONFIG_PATH);
-const writeConfig = (o) => writeJson(CONFIG_PATH, o);
+
+async function writeJsonAtomic(path, value) {
+  const temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, JSON.stringify(value, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    await rename(temp, path);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+}
+
+async function writeJson(path, value) {
+  await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  await writeJsonAtomic(path, value);
+}
+
+const readConfig = () => readSettings(CONFIG_PATH);
+const writeConfig = (value) => writeJson(CONFIG_PATH, value);
 async function resolveKey() {
   return env.SIMAPI_API_KEY || (await readConfig()).apiKey || null;
 }
 function mask(key) {
   if (!key) return "—";
-  return key.length <= 12 ? key : `${key.slice(0, 10)}${"•".repeat(6)}${key.slice(-4)}`;
+  const value = String(key);
+  return value.length <= 8 ? "••••" : `••••${value.slice(-4)}`;
 }
 
 async function trackUsage(ms) {
@@ -94,30 +87,56 @@ async function trackUsage(ms) {
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
-async function api(path, { method = "GET", body, key } = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: { "Content-Type": "application/json", ...(key ? { "X-API-Key": key } : {}) },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(60_000),
-  });
-  const text = await res.text();
+async function api(path, { method = "GET", body, key, timeout = 65_000 } = {}) {
+  let response, text;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...(key ? { "X-API-Key": key } : {}) },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Do not forward custom authentication headers to another endpoint.
+      redirect: key ? "error" : "follow",
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (response.status === 429) {
+      const retryAfter = response.headers.get("retry-after");
+      const retryHint = retryAfter && /^\d+$/.test(retryAfter) ? ` Try again in ${retryAfter} seconds.` : " Try again later.";
+      throw new Error(`The validation API is rate limited (HTTP 429).${retryHint}`);
+    }
+    text = await response.text();
+  } catch (error) {
+    if (error.name === "TimeoutError" || error.name === "AbortError") {
+      throw new Error(`The request timed out after ${timeout / 1000} seconds. Try again or run simapi doctor.`);
+    }
+    if (error instanceof TypeError) {
+      throw new Error("Could not reach the validation API. Check your connection or SIMAPI_BASE_URL, then run simapi doctor.");
+    }
+    throw error;
+  }
   let json;
-  try { json = text ? JSON.parse(text) : {}; }
-  catch { throw new Error(`Endpoint returned non-JSON content (HTTP ${res.status}). Check deployment access and SIMAPI_BASE_URL.`); }
-  return { ok: res.ok, status: res.status, json };
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error(`The validation API returned a non-JSON response (HTTP ${response.status}). Check SIMAPI_BASE_URL or try again.`);
+  }
+  return { ok: response.ok, status: response.status, json };
+}
+
+function errorMessage(response) {
+  const error = response.json?.error ?? response.json?.detail;
+  const message = typeof error === "string" ? error : error?.message ?? error?.error;
+  return `${message || "The validation API rejected the request."} (HTTP ${response.status})`;
 }
 
 function openBrowser(url) {
-  const cmd = platform === "darwin" ? `open "${url}"` : platform === "win32" ? `start "" "${url}"` : `xdg-open "${url}"`;
-  exec(cmd, () => {});
-}
-
-async function prompt(question) {
-  const rl = createInterface({ input: stdin, output: stdout });
-  const answer = await rl.question(question);
-  rl.close();
-  return answer.trim();
+  const app = platform === "darwin" ? "open" : platform === "win32" ? "rundll32.exe" : "xdg-open";
+  const args = platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+  return new Promise((resolve, reject) => {
+    execFile(app, args, (error) => {
+      if (error) reject(new Error(`Could not open your browser. Visit ${url}.`));
+      else resolve();
+    });
+  });
 }
 
 const PROFILES_DIR = join(CONFIG_DIR, "profiles");
@@ -138,31 +157,29 @@ async function writeNew(path, content) { await writeFile(path, content, { flag: 
 const commands = {
   async init() {
     const file = "simapi.json";
-    if (existsSync(file)) return fail(`${file} already exists.`);
     const config = {
       simulation_type: "robotics",
       conditions: {},
       robotics_limits: {},
-      files: ["episode.csv"],
       fail_on: "warning",
     };
-    await writeFile(file, JSON.stringify(config, null, 2));
-    ok(`Created ${file} — edit it, then run ${c.cyan("simapi validate episode.csv")}.`);
+    await writeNew(file, JSON.stringify(config, null, 2) + "\n");
+    ok(`Created ${file}. Set your limits, then run ${c.accent("simapi validate episode.csv")} with your recording.`);
   },
 
   async validate(args) {
     const file = args._[0];
-    if (!file) return fail(`Usage: ${c.cyan("simapi validate <file>")}`);
+    if (args._.length !== 1) return fail("Usage: simapi validate <file>");
     const key = await resolveKey();
     await runValidation(file, key, args);
   },
 
   async watch(args) {
     const file = args._[0];
-    if (!file) return fail(`Usage: ${c.cyan("simapi watch <file>")}`);
+    if (args._.length !== 1) return fail("Usage: simapi watch <file>");
     const key = await resolveKey();
     if (!existsSync(file)) return fail(`File not found: ${file}`);
-    stdout.write(`\n  ${c.cyan("watching")} ${file} — re-validates on change. ${c.dim("Ctrl-C to stop.")}\n`);
+    stderr.write(`Watching ${file}. Press Ctrl-C to stop.\n`);
     await runValidation(file, key, args);
     let busy = false;
     let timer = null;
@@ -171,9 +188,14 @@ const commands = {
       timer = setTimeout(async () => {
         if (busy) return;
         busy = true;
-        stdout.write(`\n  ${c.dim(new Date().toLocaleTimeString())} change detected — re-validating…\n`);
-        await runValidation(file, key, args);
-        busy = false;
+        stderr.write(`Change detected in ${file}. Validating again.\n`);
+        try {
+          await runValidation(file, key, args);
+        } catch (error) {
+          fail(error.message);
+        } finally {
+          busy = false;
+        }
       }, 150);
     });
   },
@@ -196,39 +218,52 @@ const commands = {
 
   async "api-key"(args) {
     const sub = args._[0];
-    const key = await resolveKey();
+    if (args.stdin && sub !== "set") return fail("--stdin is only available with simapi api-key set.");
     if (sub === "show") {
+      if (args._.length !== 1) return fail("Usage: simapi api-key show");
+      const key = await resolveKey();
       if (!key) return info("No API key configured. The hosted API doesn't require one.");
-      return info(`Active key: ${c.cyan(mask(key))}`);
+      return info(`Active key: ${c.accent(mask(key))}`);
     }
     if (sub === "generate") {
       const { ok: good, json } = await api("/v1/keys/generate", { method: "POST", body: { label: args._[1] || "CLI" } });
-      if (!good) return fail(`Key generation failed: ${json?.error || "server error"}`);
+      if (!good || typeof json?.api_key !== "string" || !json.api_key) return fail("The API did not issue a key.");
       const cfg = await readConfig();
       await writeConfig({ ...cfg, apiKey: json.api_key });
-      return ok(`New key issued and saved: ${c.cyan(mask(json.api_key))}`);
+      return ok(`New key issued and saved: ${c.accent(mask(json.api_key))}`);
     }
     if (sub === "set") {
-      const value = args._[1];
-      if (!value) return fail(`Usage: ${c.cyan("simapi api-key set <key>")}`);
+      let value = args._[1];
+      if (args.stdin) {
+        if (value || stdin.isTTY) return fail("Pipe one API key to simapi api-key set --stdin.");
+        value = "";
+        for await (const chunk of stdin) {
+          value += chunk;
+          if (value.length > 4096) return fail("API key exceeds 4096 characters.");
+        }
+        value = value.trim();
+      }
+      if (!value || /\s/.test(value)) return fail("Provide a valid key with simapi api-key set --stdin.");
       const cfg = await readConfig();
       await writeConfig({ ...cfg, apiKey: value });
-      return ok(`API key saved: ${c.cyan(mask(value))}`);
+      return ok(`API key saved: ${c.accent(mask(value))}`);
     }
     if (sub === "delete") {
+      if (args._.length !== 1) return fail("Usage: simapi api-key delete");
       const cfg = await readConfig();
       delete cfg.apiKey;
       await writeConfig(cfg);
       return ok("API key deleted from this machine.");
     }
-    return fail(`Usage: ${c.cyan("simapi api-key <show|generate|set|delete>")}`);
+    return fail(`Usage: ${c.accent("simapi api-key <show|generate|set|delete>")}`);
   },
 
   async config(args) {
     if (args._[0] === "set") {
       const [, k, ...rest] = args._;
       const v = rest.join(" ");
-      if (!k) return fail(`Usage: ${c.cyan("simapi config set <key> <value>")}`);
+      if (!k || !rest.length) return fail("Usage: simapi config set <key> <value>");
+      if (k.toLowerCase() === "apikey") return fail("Use simapi api-key set --stdin to save a key.");
       const cfg = await readConfig();
       cfg[k] = v === "true" ? true : v === "false" ? false : /^-?\d+(\.\d+)?$/.test(v) ? Number(v) : v;
       await writeConfig(cfg);
@@ -252,56 +287,54 @@ const commands = {
       "materials", "tribology", "aeroelasticity", "cryogenics", "multiphysics",
     ];
     stdout.write(`\n  ${c.bold("Supported simulation types")} ${c.dim(`(${list.length})`)}\n`);
-    for (const d of list) stdout.write(`   ${c.cyan("•")} ${d}\n`);
-    stdout.write(`\n  Use with: ${c.cyan("simapi validate run.json --type <domain>")}\n\n`);
+    for (const d of list) stdout.write(`   ${c.accent("•")} ${d}\n`);
+    stdout.write(`\n  Use with: ${c.accent("simapi validate run.json --type <domain>")}\n\n`);
   },
 
   async doctor(args) {
-    const fix = !!args["fix"] || args._.includes("--fix");
+    const fix = !!args.fix;
     stdout.write(`\n  ${c.bold("SimAPI doctor")}\n`);
     stdout.write("  " + "─".repeat(46) + "\n");
     let problems = 0;
 
-    if (existsSync(CONFIG_DIR)) {
-      ok(`Config directory writable (${CONFIG_DIR})`);
-    } else if (fix) {
-      await mkdir(CONFIG_DIR, { recursive: true });
-      ok(`Created config directory (${CONFIG_DIR})`);
-    } else {
-      stdout.write(`  ${c.red("✗")} Config directory missing (${CONFIG_DIR})\n    ${c.dim("fix: simapi doctor --fix")}\n`);
+    try {
+      if (fix) await mkdir(CONFIG_DIR, { recursive: true, mode: 0o700 });
+      if (existsSync(CONFIG_DIR)) {
+        await access(CONFIG_DIR, constants.W_OK | constants.X_OK);
+        await readConfig();
+        ok(`Config directory writable (${CONFIG_DIR})`);
+      } else info("Local config will be created when needed.");
+    } catch (error) {
+      stderr.write(`  ${diagnostic.red("✗")} Could not use config: ${error.message}\n`);
       problems++;
     }
 
     const nodeMajor = Number(process.versions.node.split(".")[0]);
     if (nodeMajor >= 18) ok(`Node ${process.version} (>= 18 required)`);
     else {
-      stdout.write(`  ${c.red("✗")} Node ${process.version} is below the minimum supported version (18)\n`);
+      stderr.write(`  ${diagnostic.red("✗")} Node ${process.version} is below the minimum supported version (18)\n`);
       problems++;
     }
 
-    const key = await resolveKey();
-    if (key) ok(`API key configured (${mask(key)})`);
-    else stdout.write(`  ${c.dim("·")} No API key configured — not required for the hosted API. ${c.dim("(simapi api-key generate)")}\n`);
-
     try {
       const t = Date.now();
-      const res = await api("/v1/health");
+      const res = await api("/v1/health", { timeout: 5_000 });
       if (res.ok) ok(`API reachable at ${API_BASE} (${Date.now() - t}ms, engine=${res.json.engine || "unknown"})`);
       else {
-        stdout.write(`  ${c.red("✗")} API returned HTTP ${res.status} at ${API_BASE}\n`);
+        stderr.write(`  ${diagnostic.red("✗")} API returned HTTP ${res.status}\n`);
         problems++;
       }
     } catch (e) {
-      stdout.write(`  ${c.red("✗")} API unreachable at ${API_BASE}: ${e.message}\n`);
+      stderr.write(`  ${diagnostic.red("✗")} ${e.message}\n`);
       problems++;
     }
 
     if (existsSync("simapi.json")) {
       try {
-        JSON.parse(await readFile("simapi.json", "utf8"));
+        await readSettings("simapi.json");
         ok("simapi.json found and valid");
       } catch (e) {
-        stdout.write(`  ${c.red("✗")} simapi.json exists but is not valid JSON: ${e.message}\n`);
+        stderr.write(`  ${diagnostic.red("✗")} ${e.message}\n`);
         problems++;
       }
     } else {
@@ -310,15 +343,15 @@ const commands = {
 
     stdout.write("  " + "─".repeat(46) + "\n");
     if (problems === 0) stdout.write(`  ${c.green("All checks passed.")}\n\n`);
-    else stdout.write(`  ${c.amber(`${problems} issue(s) found`)}${fix ? "" : ` — run ${c.cyan("simapi doctor --fix")} to auto-fix what's fixable`}\n\n`);
+    else fail(`${problems} setup ${problems === 1 ? "issue" : "issues"} found.`);
   },
 
   async repair(args) {
     const file = args._[0];
     if (!file) return fail("Usage: simapi repair <file> [--apply] [--output <new-file>]");
-    const payload = await loadPayload(file, await resolveKey(), args);
-    const data = Array.isArray(payload) ? payload : payload.data || payload.trials || [];
-    const plan = repairPreview(data);
+    if (args.profile) args.profileData = await loadProfile(args.profile);
+    const payload = await loadPayload(file, args);
+    const plan = repairPreview(getRows(payload));
     if (args.json) stdout.write(JSON.stringify(plan, null, 2) + "\n");
     else {
       stdout.write(`\n  Repair preview: ${plan.original_samples} → ${plan.repaired_samples} samples\n`);
@@ -340,8 +373,8 @@ const commands = {
   async inspect(args) {
     const file = args._[0]; if (!file) return fail("Usage: simapi inspect <file> [--topic <name>] [--json]");
     if (args.profile) args.profileData = await loadProfile(args.profile);
-    const payload = await loadPayload(file, await resolveKey(), args);
-    const report = inspectRows(Array.isArray(payload) ? payload : payload.data || payload.trials || []);
+    const payload = await loadPayload(file, args);
+    const report = inspectRows(getRows(payload));
     if (args.json) return stdout.write(JSON.stringify(report, null, 2) + "\n");
     stdout.write(`\n  ${file}: ${report.samples} samples, ${report.episodes.length} episodes\n`);
     for (const episode of report.episodes) stdout.write(`  ${episode.episode_id}: ${episode.samples} samples, ${episode.duration_seconds === null ? "duration unavailable" : episode.duration_seconds + "s"}\n`);
@@ -362,7 +395,7 @@ const commands = {
       }
       rows = recording.rows;
     } else {
-      const payload = await loadPayload(file, await resolveKey(), args); rows = Array.isArray(payload) ? payload : payload.data || payload.trials;
+      rows = getRows(await loadPayload(file, args));
     }
     if (!Array.isArray(rows) || !rows.length) return fail("No samples found.");
     if (!args.output) return fail("--output is required; the source recording is never modified.");
@@ -392,7 +425,7 @@ const commands = {
       if (args.output) await writeNew(args.output, content);
       await writeNew(path, content);
       ok(`Saved profile ${name}. Use --profile ${name}`);
-      for (const warning of profile.warnings || []) info(warning);
+      for (const warning of profile.warnings || []) stderr.write(`  ${warning}\n`);
       return;
     }
     return fail("Usage: simapi profile <import|list|show|delete>");
@@ -400,6 +433,7 @@ const commands = {
 
   async compare(args) {
     if (args._.length !== 2) return fail("Usage: simapi compare <baseline.json> <current.json> [--json] [--fail-on regression]");
+    if (args["fail-on"] && args["fail-on"] !== "regression") return fail("--fail-on must be regression for simapi compare.");
     const diff = compareReports(JSON.parse(await readFile(args._[0], "utf8")), JSON.parse(await readFile(args._[1], "utf8")));
     if (args.json) stdout.write(JSON.stringify(diff, null, 2) + "\n");
     else {
@@ -413,7 +447,7 @@ const commands = {
 
   async explain() {
     const cached = await readJson(LAST_RUN_PATH, null);
-    if (!cached) return fail(`No cached validation run. Run ${c.cyan("simapi validate <file>")} first.`);
+    if (!cached) return fail(`No cached validation run. Run ${c.accent("simapi validate <file>")} first.`);
     const r = cached.result;
     const ageS = Math.round((Date.now() - cached.t) / 1000);
     stdout.write(`\n  ${c.bold("Explaining")} ${c.dim(cached.file)} ${c.dim(`(validated ${ageS}s ago)`)}\n`);
@@ -441,125 +475,139 @@ const commands = {
   },
 
   async open() {
-    const url = `${WEB_BASE}/dashboard`;
-    ok(`Opening ${c.cyan(url)}`);
-    openBrowser(url);
+    const url = new URL("/play", WEB_BASE);
+    if (!["http:", "https:"].includes(url.protocol)) return fail("SIMAPI_WEB_URL must be an HTTP(S) URL.");
+    await openBrowser(url.href);
+    ok(`Opened ${c.accent(url.href)}`);
   },
 
   version() {
-    banner();
-    stdout.write(`  ${c.bold(`v${VERSION}`)}  ${c.dim(`node ${process.version}`)}\n\n`);
+    stdout.write(`${VERSION}\n`);
   },
 
-  help() {
-    printHelp();
+  help(args) {
+    if (args._[0]) printCommandHelp(args._[0]);
+    else printHelp();
   },
 };
 
-async function loadPayload(file, key, args) {
+async function loadPayload(file, args, { allowAi = false, key } = {}) {
   if (/\.(mcap|bag)$/i.test(file)) {
     const { readRecording } = await import("../lib/robotics-import.js");
     const recording = await readRecording(new Uint8Array(await readFile(file)), file, { topic: args.topic, episode: args.episode, profile: args.profileData });
     if (recording.requires_topic) throw new Error(`Choose --topic: ${recording.topics.map((t) => t.topic).join(", ")}`);
     return { data: recording.rows, simulation_type: "robotics" };
   }
-  const raw = await readFile(file, "utf8");
-  if (file.toLowerCase().endsWith(".csv")) { const parsed = parseCsvDocument(raw); return { data: parsed.rows, source_lines: parsed.sourceLines, simulation_type: args.type || "robotics" }; }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // Not JSON (e.g. simulations.txt / a log dump) → convert with AI.
-    stdout.write(`  ${c.dim(`Parsing ${file} with AI…`)}\n`);
-    const pr = await api("/v1/parse", { method: "POST", body: { text: raw, simulation_type: args.type }, key });
-    if (!pr.ok) {
-      if (pr.json && pr.json.enabled === false)
-        throw new Error("AI text parsing isn't enabled yet (server needs OPENROUTER_API_KEY). Use a .json file for now.");
-      throw new Error(`Could not parse ${file}: ${(pr.json && pr.json.error) || pr.status}`);
-    }
-    return pr.json; // { simulation_type, conditions, data }
+  const extension = extname(file).toLowerCase();
+  if (!["", ".json", ".csv", ".txt", ".log"].includes(extension)) {
+    throw new Error("Supported inputs are CSV, JSON, ROS 1 bags, and MCAP. Use simapi validate for optional text parsing.");
   }
+  const raw = (await readFile(file, "utf8")).replace(/^\uFEFF/, "");
+  if (extension === ".csv") {
+    const parsed = parseCsvDocument(raw);
+    return { data: parsed.rows, source_lines: parsed.sourceLines };
+  }
+  try {
+    const payload = JSON.parse(raw);
+    if (payload && typeof payload === "object") return payload;
+  } catch {
+    // Only explicit text inputs to validate may use the AI parser.
+  }
+  if (!allowAi || ![".txt", ".log"].includes(extension)) {
+    throw new Error(`${file} must contain a JSON array of samples or an object with a data array.`);
+  }
+  stderr.write(`Parsing text with the hosted AI parser.\n`);
+  const response = await api("/v1/parse", { method: "POST", body: { text: raw, simulation_type: args.type }, key });
+  if (!response.ok) throw new Error(`Could not parse ${file}: ${errorMessage(response)}`);
+  return response.json;
 }
 
+async function assertSeparateOutput(input, output) {
+  const inputPath = await realpath(input);
+  const outputPath = await realpath(output).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return resolve(output);
+  });
+  if (inputPath === outputPath) throw new Error("Choose a report path separate from your recording and profile.");
+}
+
+function getRows(payload) {
+  const rows = Array.isArray(payload) ? payload : payload?.data ?? payload?.trials;
+  if (!Array.isArray(rows) || !rows.length || rows.some((row) => !row || typeof row !== "object" || Array.isArray(row))) {
+    throw new Error("The recording must contain at least one sample with named signals.");
+  }
+  return rows;
+}
 
 async function runValidation(file, key, args) {
   if (!existsSync(file)) return fail(`File not found: ${file}`);
-  const cfg = await readConfig();
-  const projectCfg = await readJson("simapi.json");
-  args.profile ??= projectCfg.profile || cfg.profile;
-  args["fail-on"] ??= projectCfg.fail_on || cfg.fail_on;
-  let profileLimits = {};
-  let profileConditions = {};
-  let profileFtcLimits = {};
-  let profileUnits = {};
-  let profileKind = "robotics";
-  if (args.profile === "") return fail("--profile requires a JSON profile path.");
-  if (args.profile) {
-    let profile;
-    try { profile = await loadProfile(args.profile); }
-    catch (e) { return fail(e.message); }
-    profileLimits = profile.robotics_limits;
-    profileConditions = profile.conditions;
-    profileFtcLimits = profile.ftc_limits || {};
-    profileUnits = profile.units || {};
-    profileKind = profile.robotics_profile || "robotics";
-    args.profileData = profile;
-  }
-  let payload;
-  try {
-    payload = await loadPayload(file, key, args);
-  } catch (e) {
-    return fail(e.message);
-  }
-  const body = Array.isArray(payload)
-    ? {
-        data: payload,
-        simulation_type: args.type || projectCfg.simulation_type || cfg.simulation_type || "robotics",
-        conditions: projectCfg.conditions || {},
-        ...(projectCfg.robotics_limits ? { robotics_limits: projectCfg.robotics_limits } : {}),
-      }
-    : {
-        simulation_type: args.type || payload.simulation_type || projectCfg.simulation_type || cfg.simulation_type || "robotics",
-        conditions: payload.conditions || projectCfg.conditions || {},
-        ...(payload.robotics_limits || projectCfg.robotics_limits
-          ? { robotics_limits: payload.robotics_limits || projectCfg.robotics_limits }
-          : {}),
-        data: payload.data || payload.trials || [],
-        ...(payload.robotics_profile ? { robotics_profile: payload.robotics_profile } : {}),
-        ...(payload.ftc_limits ? { ftc_limits: payload.ftc_limits } : {}),
-        ...(payload.units ? { units: payload.units } : {}),
-      };
-  if (args.profile) {
-    if (body.simulation_type !== "robotics") return fail("--profile can only be used with --type robotics.");
-    body.robotics_limits = { ...(body.robotics_limits || {}), ...profileLimits };
-    body.conditions = { ...body.conditions, ...profileConditions };
-    if (Object.keys(profileUnits).length) body.units = { ...(body.units || {}), ...profileUnits };
-    if (profileKind === "ftc") {
-      body.robotics_profile = "ftc";
-      body.ftc_limits = { ...(body.ftc_limits || {}), ...profileFtcLimits };
+  const exact = args["exact-profile"];
+  if (exact && !args.profile) return fail("--exact-profile requires --profile <name|file>.");
+  const cfg = exact ? {} : await readConfig();
+  const projectCfg = exact ? {} : await readSettings("simapi.json");
+  const profileName = args.profile ?? projectCfg.profile ?? cfg.profile;
+  const threshold = args["fail-on"] ?? projectCfg.fail_on ?? cfg.fail_on;
+  if (threshold !== undefined && !["warning", "failed"].includes(threshold)) return fail("--fail-on must be failed or warning.");
+  if (args.format && args.format !== "github") return fail("--format must be github.");
+  if (args.report) {
+    await assertSeparateOutput(file, args.report);
+    if (profileName && !resolveFtcProfile(profileName)) {
+      const path = existsSync(profileName) ? profileName : profilePath(profileName);
+      await assertSeparateOutput(path, args.report);
     }
   }
-  if (args.report === "") return fail("--report requires an output path.");
-  body.run_ai = !args["no-ai"];
-  if (args["fail-on"] && !["warning", "failed"].includes(args["fail-on"])) return fail("--fail-on must be warning or failed.");
-  if (args.format && args.format !== "github") return fail("--format must be github.");
 
-  const t0 = Date.now();
-  let res;
+  const profile = profileName ? await loadProfile(profileName) : undefined;
+  const payload = await loadPayload(file, { ...args, profileData: profile }, { allowAi: args.ai && !exact, key });
+  const settings = exact || Array.isArray(payload) ? {} : payload;
+  const simType = args.type || settings.simulation_type || projectCfg.simulation_type || cfg.simulation_type || "robotics";
+  const body = {
+    data: getRows(payload),
+    simulation_type: simType,
+    conditions: settings.conditions || projectCfg.conditions || {},
+    robotics_limits: settings.robotics_limits ?? (simType === "robotics" ? projectCfg.robotics_limits : undefined),
+    robotics_profile: settings.robotics_profile,
+    ftc_limits: settings.ftc_limits,
+    units: settings.units,
+    run_ai: args.ai ?? false,
+  };
+  if (profile) {
+    if (body.simulation_type !== "robotics") return fail("--profile can only be used with --type robotics.");
+    body.robotics_limits = { ...body.robotics_limits, ...profile.robotics_limits };
+    body.conditions = { ...body.conditions, ...profile.conditions };
+    if (profile.units) body.units = { ...body.units, ...profile.units };
+    if (profile.robotics_profile === "ftc") {
+      body.robotics_profile = "ftc";
+      body.ftc_limits = { ...body.ftc_limits, ...profile.ftc_limits };
+    }
+  }
+  const started = Date.now();
+  const response = await api("/v1/validate", { method: "POST", body, key });
+  if (!response.ok) return fail(errorMessage(response));
+  if (!["passed", "warning", "failed"].includes(response.json?.status)) {
+    return fail("The validation API returned an invalid report. Check SIMAPI_BASE_URL or try again.");
+  }
+  const r = {
+    ...response.json,
+    validation_context: {
+      simulation_type: body.simulation_type,
+      robotics_limits: body.robotics_limits || {},
+      conditions: body.conditions,
+      ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}),
+      ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}),
+      ...(body.units ? { units: body.units } : {}),
+    },
+  };
+  if (args.report) await writeJsonAtomic(args.report, r);
   try {
-    res = await api("/v1/validate", { method: "POST", body, key });
-  } catch (e) {
-    return fail(`Request failed: ${e.message} ${c.dim(`(is ${API_BASE} reachable?)`)}`);
+    await trackUsage(Date.now() - started);
+    await writeJson(LAST_RUN_PATH, { file, t: Date.now(), result: r });
+  } catch {
+    stderr.write("Could not update local run history. Check your SIMAPI_CONFIG_DIR permissions.\n");
   }
-  await trackUsage(Date.now() - t0);
-
-  if (!res.ok) {
-    const err = res.json?.error || {};
-    return fail(`[${err.code || res.status}] ${err.message || "validation error"}`);
+  if (args.format === "github") {
+    for (const line of githubAnnotations(r, file, payload.source_lines)) stderr.write(line + "\n");
   }
-  const r = { ...res.json, validation_context: { simulation_type: body.simulation_type, robotics_limits: body.robotics_limits || {}, conditions: body.conditions || {}, ...(body.robotics_profile ? { robotics_profile: body.robotics_profile } : {}), ...(body.ftc_limits ? { ftc_limits: body.ftc_limits } : {}), ...(body.units ? { units: body.units } : {}) } };
-  if (args.format === "github") for (const line of githubAnnotations(r, file, payload.source_lines)) process.stderr.write(line + "\n");
-  await writeJson(LAST_RUN_PATH, { file, t: Date.now(), result: r });
-  if (args.report) await writeFile(args.report, JSON.stringify(r, null, 2) + "\n");
   if (args.json) stdout.write(JSON.stringify(r, null, 2) + "\n");
   else if (args.summary || args.format === "github" || env.CI) {
     stdout.write(`${r.status.toUpperCase()}  ${file}  ${r.trials_submitted ?? "?"} samples, ${r.trials_excluded ?? "?"} excluded, ${r.failed ?? "?"} failed checks, ${r.warnings ?? "?"} warnings\n`);
@@ -567,37 +615,36 @@ async function runValidation(file, key, args) {
     for (const issue of (r.issues || []).slice(0, 3)) stdout.write(`  ${issue.human_name || issue.name}: ${issue.detail || ""}\n`);
   } else renderReport(r, file, body.simulation_type);
 
-  if (args["fail-on"] === "warning" && r.status !== "passed") process.exitCode = 1;
-  if (args["fail-on"] === "failed" && r.status === "failed") process.exitCode = 1;
+  const failedThreshold = (threshold === "warning" && r.status !== "passed") ||
+    (threshold === "failed" && r.status === "failed");
+  process.exitCode = failedThreshold ? 1 : 0;
 }
 
 function printRoboticsWarnings(r) {
   const warnings = r.robotics_warnings || r.screening_warnings || r.robotics_summary?.screening_warnings || [];
-  for (const warning of warnings) stdout.write(`  ${c.amber("⚠")} ${warning}\n`);
+  for (const warning of warnings) {
+    const detail = typeof warning === "string" ? warning : warning?.detail;
+    if (detail) stderr.write(`  ${diagnostic.amber("⚠")} ${detail}\n`);
+  }
 }
 
 function renderReport(r, file, simType) {
   const status = (r.status || "").toUpperCase();
   const tone = r.status === "passed" ? c.green : r.status === "warning" ? c.amber : c.red;
   const mark = r.status === "passed" ? "✓" : r.status === "warning" ? "⚠" : "✗";
-  const failures = (r.issues || []).filter((i) => i.status === "failed").length;
-  const warns = (r.issues || []).filter((i) => i.status === "warning").length;
+  const failures = r.failed ?? (r.issues || []).filter((i) => i.status === "failed").length;
+  const warns = r.warnings ?? (r.issues || []).filter((i) => i.status === "warning").length;
 
   // Status banner
   const title = ` ${mark}  ${status}`;
-  const right = file;
-  const width = Math.max(48, title.length + right.length + 6);
-  stdout.write("\n  " + c.dim("╭" + "─".repeat(width) + "╮") + "\n");
-  const pad = width - title.length - right.length - 2;
-  stdout.write("  " + c.dim("│") + tone(c.bold(title)) + " ".repeat(Math.max(1, pad)) + c.dim(right) + " " + c.dim("│") + "\n");
-  stdout.write("  " + c.dim("╰" + "─".repeat(width) + "╯") + "\n\n");
+  stdout.write(`\n  ${tone(title.trimStart())}  ${file}\n\n`);
 
   // Summary
   const excl = r.trials_excluded ?? 0;
   row("Simulation", simType);
   if (r.robotics_summary) {
     row("Motion engine", r.robotics_summary.engine_version);
-    row("Episodes", String(r.robotics_summary.episodes.length));
+    row("Episodes", String(r.robotics_summary.episodes?.length ?? "—"));
     if (r.robotics_summary.limits_source) row("Joint limits", r.robotics_summary.limits_source);
   }
   printRoboticsWarnings(r);
@@ -628,7 +675,7 @@ function renderReport(r, file, simType) {
   const recs = r.ai?.recommendations || r.recommendations || [];
   if (recs.length) {
     stdout.write(`\n  ${c.bold("Recommendations")}\n`);
-    for (const rec of recs.slice(0, 6)) stdout.write(`   ${c.cyan("→")} ${rec}\n`);
+    for (const rec of recs.slice(0, 6)) stdout.write(`   ${c.accent("→")} ${rec}\n`);
   }
   if (r.ai && r.ai.dataset_summary) {
     stdout.write(`\n  ${c.bold("AI review")}  ${c.dim(r.ai.model ? r.ai.model.split("/").pop() : "")}\n   ${c.dim(r.ai.dataset_summary)}\n`);
@@ -637,65 +684,111 @@ function renderReport(r, file, simType) {
 }
 
 // ── Help ──────────────────────────────────────────────────────────────────────
+const VALIDATE_OPTIONS = [
+  ["--profile <name|file>", "Use a saved or built-in profile, or a JSON profile file"],
+  ["--exact-profile", "Use only the named profile's check settings"],
+  ["--type <domain>", "Select a simulation domain (default: robotics)"],
+  ["--topic <name>", "Select a JointState channel in a ROS bag or MCAP"],
+  ["--episode <id>", "Set the episode ID for a ROS bag or MCAP"],
+  ["--report <file>", "Write or replace a JSON report at the given path"],
+  ["--fail-on <level>", "Exit 1 on 'failed' checks, or on 'warning' and failed checks"],
+  ["--format github", "Write GitHub Actions annotations to stderr"],
+  ["--json", "Print only the JSON report to stdout"],
+  ["--summary", "Print a compact report (the default in CI)"],
+  ["--ai / --no-ai", "Enable optional AI review and text parsing (default: off)"],
+];
+
 const HELP = {
-  inspect: { usage: "simapi inspect <file>", desc: "Inspect samples, episodes, timing, signal ranges and missing values locally.", opts: [["--json", "machine-readable inspection"], ["--topic <name>", "choose a recording topic"]] },
-  import: { usage: "simapi import <file> --output <run.json>", desc: "Extract JointState samples from ROS 1 bags, ROS 1/2 MCAP, CSV, or JSON. Select --topic when several channels exist.", opts: [["--topic <topic>", "select a JointState channel"], ["--list-topics", "inspect recording channels"], ["--profile <name|file>", "load joint metadata, including prismatic effort units"], ["--episode <id>", "assign an episode identifier"]] },
-  profile: { usage: "simapi profile <import|list|show|delete>", desc: "Import URDF limits or JSON profiles, or use the built-in ftc/frc school robotics profile.", ex: ["simapi profile import arm.urdf --name arm --output arm-profile.json", "simapi profile list", "simapi profile show arm", "simapi validate drive-log.csv --profile ftc"] },
-  compare: { usage: "simapi compare baseline.json current.json", desc: "Compare checks, episode findings, exclusions, and configuration.", opts: [["--json", "JSON comparison"], ["--fail-on regression", "fail CI on new or worsened findings"]] },
-  init: { usage: "simapi init", desc: "Create a simapi.json config in the current project." },
-  validate: { usage: "simapi validate <file>", desc: "Validate a .json, .csv, or .txt simulation file and print the report. Plain-text/log files are converted to JSON with AI.", opts: [["--summary", "compact report (automatic in CI)"], ["--format github", "emit GitHub Actions annotations"], ["--topic <name>", "select a recording channel"], ["--type <domain>", "simulation domain (defaults to robotics)"], ["--profile <file>", "robotics limits and trajectory check options"], ["--report <file>", "save the full JSON report"], ["--json", "raw JSON output"], ["--no-ai", "skip the AI second pass"], ["--fail-on <level>", "exit non-zero on warning|failed"]], ex: ["simapi validate episode.csv --profile arm-profile.json --fail-on warning", "simapi validate drive-log.csv --profile ftc", "simapi validate simulation.json", "simapi validate simulations.txt --type aerodynamics"] },
-  domains: { usage: "simapi domains", desc: "List the supported simulation types." },
-  doctor: { usage: "simapi doctor [--fix]", desc: "Diagnose config, connectivity, and project setup." },
-  explain: { usage: "simapi explain", desc: "Explain the issues from the most recent validation run in detail." },
-  repair: { usage: "simapi repair <file> [--apply]", desc: "Preview or apply automatic structural repairs to a data file.", ex: ["simapi repair simulation.json", "simapi repair simulation.json --apply"] },
-  open: { usage: "simapi open", desc: "Open the SimAPI dashboard in your browser." },
-  watch: { usage: "simapi watch <file>", desc: "Re-run validation automatically whenever the file changes.", ex: ["simapi watch simulation.json"] },
-  usage: { usage: "simapi usage", desc: "Show requests today/this month, remaining quota, and average time." },
-  "api-key": { usage: "simapi api-key <show|generate|set|delete>", desc: "The hosted API needs no key. Only relevant for your own deployment.", ex: ["simapi api-key generate", "simapi api-key set <key>", "simapi api-key show"] },
-  config: { usage: "simapi config [set <key> <value>]", desc: "Show or update CLI configuration.", ex: ["simapi config", "simapi config set fail_on warning"] },
-  version: { usage: "simapi version", desc: "Print the installed CLI version." },
-  help: { usage: "simapi help", desc: "Show all commands." },
+  init: { usage: "simapi init", desc: "Create simapi.json with starter robotics settings in this directory." },
+  validate: {
+    usage: "simapi validate <file> [options]",
+    desc: "Check CSV, JSON, or a robot recording using the hosted validation engine.",
+    opts: VALIDATE_OPTIONS,
+    ex: ["simapi validate run.csv", "simapi validate run.json --profile ./arm-profile.json --exact-profile --report ./simapi-report.json --fail-on failed"],
+  },
+  inspect: {
+    usage: "simapi inspect <file> [options]",
+    desc: "Inspect episode counts, sample timing, and signal ranges locally.",
+    opts: [["--json", "Print JSON to stdout"], ["--profile <name|file>", "Load joint metadata"], ["--topic <name>", "Select a recording channel"], ["--episode <id>", "Assign the recording an episode ID"]],
+  },
+  doctor: {
+    usage: "simapi doctor [--fix]",
+    desc: "Check local configuration and whether the hosted API is reachable.",
+    opts: [["--fix", "Create the local config directory if it is missing"]],
+  },
+  import: {
+    usage: "simapi import <file> --output <run.json>",
+    desc: "Extract JointState samples from a ROS bag or MCAP, or convert CSV and JSON recordings.",
+    opts: [["--topic <name>", "Select a JointState channel"], ["--list-topics", "List channels instead of importing"], ["--json", "Print channel listings as JSON"], ["--profile <name|file>", "Load joint metadata"], ["--episode <id>", "Assign an episode ID"]],
+  },
+  profile: {
+    usage: "simapi profile <import|list|show|delete>",
+    desc: "Manage reusable URDF and JSON profiles. FTC and FRC profiles are built in.",
+    ex: ["simapi profile import arm.urdf --name arm --output arm-profile.json", "simapi profile list --json", "simapi profile show arm", "simapi validate drive-log.csv --profile ftc"],
+  },
+  compare: {
+    usage: "simapi compare <baseline.json> <current.json>",
+    desc: "Compare findings, excluded samples, and settings between two reports.",
+    opts: [["--json", "Print a JSON comparison"], ["--fail-on regression", "Exit 1 on new or more severe findings"]],
+  },
+  repair: {
+    usage: "simapi repair <file> [options]",
+    desc: "Preview recording repairs locally. Use --apply to write a separate file.",
+    opts: [["--apply", "Write a repaired copy if the preview proposes changes"], ["--output <file>", "Set the repaired copy's path"], ["--json", "Print the repair plan as JSON"], ["--profile <name|file>", "Load joint metadata for a ROS recording"], ["--topic <name>", "Select a recording channel"], ["--episode <id>", "Assign the recording an episode ID"]],
+  },
+  watch: { usage: "simapi watch <file> [options]", desc: "Validate again when the recording changes.", opts: VALIDATE_OPTIONS },
+  explain: { usage: "simapi explain", desc: "Show findings from the last validation." },
+  domains: { usage: "simapi domains", desc: "List the simulation domains supported by validate." },
+  usage: { usage: "simapi usage", desc: "Show local request counts and average validation time." },
+  open: { usage: "simapi open", desc: "Open the SimAPI playground in your browser." },
+  "api-key": {
+    usage: "simapi api-key <show|generate|set|delete>",
+    desc: "Manage an optional API key for a private deployment. Public validation needs no account.",
+    ex: ["simapi api-key show", "simapi api-key set --stdin"],
+  },
+  config: { usage: "simapi config [set <key> <value>]", desc: "Show or update local CLI settings.", ex: ["simapi config set fail_on warning"] },
+  version: { usage: "simapi --version", desc: "Print the installed version." },
+  help: { usage: "simapi help [command]", desc: "Show command help." },
 };
 
-function printHelp() {
-  banner();
-  stdout.write(`  ${c.bold("Usage")}\n    simapi ${c.dim("<command> [options]")}\n\n`);
-  stdout.write(`  ${c.bold("Commands")}\n`);
-  const items = [
-    ["init", "Create a robotics simapi.json config"],
-    ["inspect <file>", "Inspect episode timing, ranges and missing signals"],
-    ["import <recording> --output <file>", "Extract JointState data from ROS bags or MCAP"],
-    ["profile <import|list|show|delete>", "Reusable JSON, URDF, and built-in ftc/frc profiles"],
-    ["compare <baseline> <current>", "Compare checks and episode findings"],
-    ["validate <file>", "Validate JSON or CSV simulation data"],
-    ["watch <file>", "Re-validate on file change"],
-    ["domains", "List supported simulation types"],
-    ["usage", "Show API usage statistics"],
-    ["api-key <cmd>", "show · generate · set · delete (optional -- no account needed)"],
-    ["config [set]", "Show or update configuration"],
-    ["doctor [--fix]", "Diagnose config and connectivity"],
-    ["explain", "Explain the last validation run in detail"],
-    ["repair <file> [--apply]", "Preview or apply automatic repairs"],
-    ["open", "Open the dashboard in your browser"],
-    ["version", "Show the CLI version"],
-    ["help", "Show this help"],
-  ];
-  for (const [name, desc] of items) stdout.write(`    ${c.cyan(name)}\n      ${c.dim(desc)}\n`);
-  stdout.write(`\n  ${c.dim("Run")} ${c.cyan("simapi <command> --help")} ${c.dim("for details on a command.")}\n\n`);
+const START_COMMANDS = ["init", "validate", "inspect", "doctor"];
+
+function printHelp(compact = false) {
+  stdout.write(`\n  ${c.accent(c.bold("SimAPI"))}  ${c.dim(`v${VERSION}`)}\n`);
+  stdout.write("  Validate robot recordings and profiles. No account required.\n\n");
+  stdout.write(`  ${c.bold("Usage")}  simapi <command> [options]\n\n`);
+  printCommandList("Start here", START_COMMANDS);
+  if (!compact) {
+    printCommandList("Recordings and reports", ["import", "profile", "compare", "repair", "watch", "explain"]);
+    printCommandList("Tools and settings", ["domains", "usage", "open", "api-key", "config", "version", "help"]);
+  }
+  stdout.write(compact
+    ? `  Run ${c.accent("simapi --help")} for all commands.\n\n`
+    : `  Run ${c.accent("simapi <command> --help")} for options and examples.\n\n`);
+}
+
+function printCommandList(heading, names) {
+  stdout.write(`  ${c.bold(heading)}\n`);
+  for (const name of names) {
+    stdout.write(`    ${c.accent(name.padEnd(9))}  ${HELP[name].desc}\n`);
+  }
+  stdout.write("\n");
 }
 
 function printCommandHelp(name) {
+  if (!Object.hasOwn(HELP, name)) return fail(`Unknown command: ${name}. Run simapi --help.`);
   const h = HELP[name];
-  if (!h) return printHelp();
-  stdout.write(`\n  ${c.bold(name)} — ${h.desc}\n\n`);
-  stdout.write(`  ${c.bold("Usage")}\n    ${c.cyan(h.usage)}\n`);
+  stdout.write(`\n  ${c.accent(h.usage)}\n  ${h.desc}\n`);
   if (h.opts) {
     stdout.write(`\n  ${c.bold("Options")}\n`);
-    for (const [o, d] of h.opts) stdout.write(`    ${c.cyan(o.padEnd(20))} ${c.dim(d)}\n`);
+    for (const [o, d] of h.opts) stdout.write(`    ${c.accent(o.padEnd(23))} ${d}\n`);
   }
   if (h.ex) {
     stdout.write(`\n  ${c.bold("Examples")}\n`);
-    for (const e of h.ex) stdout.write(`    ${c.dim("$")} ${e}\n`);
+    for (const example of h.ex) stdout.write(`    ${example}\n`);
+  }
+  if (name === "validate") {
+    stdout.write("\n  Exit codes: 0 checks complete, 1 threshold reached, 2 command or service error.\n");
   }
   stdout.write("\n");
 }
@@ -710,43 +803,79 @@ function ok(msg) {
 function info(msg) {
   stdout.write(`  ${msg}\n`);
 }
-function fail(msg) {
-  stdout.write(`  ${c.red("✗")} ${msg}\n`);
-  process.exitCode = 1;
+function fail(message) {
+  stderr.write(`${diagnostic.red("Error:")} ${message}\n`);
+  process.exitCode = 2;
 }
 
-// ── Arg parsing ─────────────────────────────────────────────────────────────────
-function parse(argv) {
-  const out = { _: [], type: undefined, profile: undefined, json: false, "fail-on": undefined, help: false, fix: false, apply: false };
+const NUMBER_OF_POSITIONALS = {
+  init: 0, validate: 1, watch: 1, usage: 0, "api-key": 2, domains: 0,
+  doctor: 0, repair: 1, inspect: 1, import: 1, profile: 2, compare: 2,
+  explain: 0, open: 0, version: 0, help: 1,
+};
+const VALUE_FLAGS = new Set(["report", "output", "topic", "episode", "name", "format", "type", "profile", "fail-on"]);
+const RECORDING_FLAGS = ["profile", "topic", "episode", "json"];
+const VALIDATE_FLAGS = [...RECORDING_FLAGS, "report", "format", "type", "fail-on", "summary", "ai", "no-ai", "exact-profile"];
+const COMMAND_FLAGS = {
+  validate: VALIDATE_FLAGS,
+  watch: VALIDATE_FLAGS,
+  inspect: RECORDING_FLAGS,
+  import: [...RECORDING_FLAGS, "list-topics", "output"],
+  repair: [...RECORDING_FLAGS, "apply", "output"],
+  doctor: ["fix"],
+  profile: ["json", "name", "output"],
+  compare: ["json", "fail-on"],
+  "api-key": ["stdin"],
+};
+
+function parse(command, argv) {
+  const args = { _: [] };
+  const flags = COMMAND_FLAGS[command] ?? [];
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--help" || a === "-h") out.help = true;
-    else if (a === "--json") out.json = true;
-    else if (a === "--no-ai") out["no-ai"] = true;
-    else if (["--report", "--output", "--topic", "--episode", "--name", "--format", "--type", "--profile", "--fail-on"].includes(a)) { const value = argv[++i]; if (!value || value.startsWith("--")) throw new Error(`${a} requires a value.`); out[a.slice(2)] = value; }
-    else if (a === "--summary") out.summary = true;
-    else if (a === "--list-topics") out["list-topics"] = true;
-    else if (a === "--fix") out.fix = true;
-    else if (a === "--apply") out.apply = true;
-    else if (a.startsWith("--")) throw new Error(`Unknown option: ${a}`);
-    else out._.push(a);
+    const arg = argv[i];
+    if (arg === "--") {
+      args._.push(...argv.slice(i + 1));
+      break;
+    }
+    if (arg === "-h" || arg === "--help") args.help = true;
+    else if (arg.startsWith("--")) {
+      const equals = arg.indexOf("=");
+      const flag = arg.slice(2, equals < 0 ? undefined : equals);
+      if (!flags.includes(flag)) throw new Error(`Unknown option for ${command}: --${flag}. Run simapi ${command} --help.`);
+      if (VALUE_FLAGS.has(flag)) {
+        const value = equals < 0 ? argv[++i] : arg.slice(equals + 1);
+        if (!value || (equals < 0 && value.startsWith("--"))) throw new Error(`--${flag} requires a value.`);
+        args[flag] = value;
+      } else {
+        if (equals >= 0) throw new Error(`--${flag} does not take a value.`);
+        if (flag === "ai" || flag === "no-ai") args.ai = flag === "ai";
+        else args[flag] = true;
+      }
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown option for ${command}: ${arg}. Run simapi ${command} --help.`);
+    } else args._.push(arg);
   }
-  return out;
+  if (args._.length > NUMBER_OF_POSITIONALS[command]) throw new Error(`Too many arguments. Run simapi ${command} --help.`);
+  return args;
 }
 
 async function main() {
   const [, , cmd, ...rest] = process.argv;
-  const args = parse(rest);
-
-  if (!cmd || cmd === "--help" || cmd === "-h") return printHelp();
-  if (cmd === "--version" || cmd === "-v") return commands.version();
-  const name = cmd === "apikey" ? "api-key" : cmd;
-  if (!(name in commands)) {
-    fail(`Unknown command: ${cmd}`);
-    return printHelp();
+  if (!cmd) return printHelp(true);
+  if (cmd === "--help" || cmd === "-h") {
+    if (rest.length === 1) return printCommandHelp(rest[0]);
+    if (!rest.length) return printHelp();
+    return fail("Usage: simapi help [command]");
   }
+  const name = cmd === "apikey" ? "api-key" : ["--version", "-v"].includes(cmd) ? "version" : cmd;
+  if (!Object.hasOwn(commands, name)) return fail(`Unknown command: ${cmd}. Run simapi --help.`);
+  const args = parse(name, rest);
   if (args.help) return printCommandHelp(name);
   await commands[name](args);
 }
 
-main().catch((e) => fail(e.message));
+main().catch((error) => {
+  if (error.code === "EEXIST") return fail(`File already exists: ${error.path}. Choose another path.`);
+  if (error.code === "ENOENT") return fail(`File or directory not found: ${error.path}`);
+  fail(error.message);
+});

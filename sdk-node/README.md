@@ -1,34 +1,38 @@
-# SimAPI: Simulations you can trust
+# SimAPI CLI
 
-Node.js SDK and CLI for hosted robotics validation. Check trajectories, joint limits, timing, and training data from your terminal or application.
+Check robot recordings, trajectories, and joint limits from a terminal or CI. Validation uses the same hosted engine as the SimAPI playground. The public service requires no account, key, or local server.
 
-## Install the current source
+## Install and run
 
-```bash
-git clone https://github.com/TaxCollector23/simAPI.git
-cd simAPI/sdk-node
-npm ci
-npm run build
-npm install -g .
+```sh
+npm install -g simapi-cli
+simapi
 ```
 
-The source package is version 1.1.3. A source update does not publish a new npm release. Check the npm version before relying on its commands.
+Use Node.js 18 or later. To try the CLI without a global install, run `npx --yes --package simapi-cli simapi`. If npm can't install global packages with your current permissions, use the `npx` form or install Node with a version manager.
 
-## CLI
+```sh
+simapi doctor
+simapi inspect episode.csv
+simapi validate episode.csv
+```
+
+Use a CSV or JSON recording from your project. To save default settings for the directory, run `simapi init` and edit the generated `simapi.json`. It creates a new file and keeps any existing settings file intact. Run `simapi --help` for all commands or `simapi validate --help` for validation options.
+
+## Profiles and recordings
 
 ```bash
-simapi init
 simapi profile import arm.urdf --name arm --output arm-profile.json
 simapi profile list
 simapi inspect capture.mcap --topic /joint_states --profile arm
 simapi profile show arm
 simapi import capture.mcap --list-topics
 simapi import capture.mcap --topic /joint_states --profile arm --episode pick --output run.json
-simapi validate run.json --profile arm --no-ai --format github --report report.json --fail-on failed
+simapi validate run.json --profile arm --format github --report report.json --fail-on failed
 simapi compare baseline.json report.json --json --fail-on regression
 simapi repair run.json
 simapi repair run.json --apply --output run.repaired.json
-simapi watch run.json --profile arm --no-ai
+simapi watch run.json --profile arm
 ```
 
 `inspect` reports sample/episode counts, valid durations, signal ranges, and missing values locally. `--summary` prints a compact validation report; CI environments use it automatically. Project `simapi.json` settings for `profile` and `fail_on` are honored unless overridden.
@@ -39,17 +43,25 @@ simapi watch run.json --profile arm --no-ai
 
 ROS bag supports uncompressed, BZ2, and LZ4 files. MCAP supports ROS 1 (`ros1msg` / `ros1`), ROS 2 (`ros2msg` / `cdr`), and JSON messages, with BZ2, LZ4, and Zstd chunks. ROS 2 SQLite `.db3` bags and IDL-only schemas must be converted first. Multiple topics require `--topic`. Import rejects over 10,000 samples or 100 MB, rather than truncating data. An import is one episode unless assigned another ID with `--episode`; timestamp resets remain visible to validation.
 
-`--format github` writes up to 50 escaped workflow annotations to stderr, while `--json` remains clean JSON on stdout. CSV findings annotate a source line. Other formats identify the episode, sample, and signal in the message. `--fail-on failed` or `--fail-on warning` sets exit code 1 at that threshold. Unexpected errors also return nonzero.
+`--format github` writes up to 50 escaped workflow annotations to stderr. CSV findings include the source line. Other formats identify the episode, sample, and signal in the message. With `--json`, stdout contains only the JSON report.
 
 `compare` checks severity changes, episode counts, exclusions, and configuration. `--fail-on regression` returns 1 for new/worsened checks or a worse verdict. Changed or unknown settings are reported explicitly.
 
 `repair` runs locally without an API call. Preview the plan first. It can remove exact repeated timestamped samples, reorder within an episode, and interpolate at most two missing joint/tool values between valid neighbours. It does not bridge episodes, choose between conflicting timestamps, or infer wrapped angles. `--apply` writes a separate `.repaired.json`/`.repaired.csv`; existing files are never overwritten. Revalidate the repaired copy before use.
 
-`--report` writes the complete validation response, including configuration and per-sample evidence. Evidence details are capped at 1,000 with explicit total/truncated fields; check and episode totals cover the entire run.
+`--report` writes the complete validation response, including configuration and per-sample evidence. It replaces a previous report at that path. Use a separate path from the recording and profile. Evidence details are capped at 1,000, with total and truncation fields that describe the full run.
 
-## GitHub Actions
+## Reproduce a playground run in CI
 
-This workflow installs the source CLI in a separate directory. Pin `ref` to the source revision you have reviewed.
+Download the run input and profile from the playground report and put them in your repository. The copied command points to those files. `--exact-profile` applies the downloaded check settings and ignores extra settings in a local config or a recording's JSON envelope.
+
+```sh
+simapi validate ./simapi-run.json --profile ./simapi-profile.json --exact-profile --no-ai --report ./simapi-report.json --fail-on failed
+```
+
+Use `--fail-on failed` to gate on errors or `--fail-on warning` to also gate on warnings. Exit code `1` marks a run that met the chosen threshold, and the JSON report is still written. Exit code `0` means validation completed without crossing the threshold. Exit code `2` means the CLI could not complete validation or write the report. Diagnostics go to stderr.
+
+### GitHub Actions
 
 ```yaml
 name: Robotics checks
@@ -62,13 +74,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: actions/checkout@v4
-        with:
-          repository: TaxCollector23/simAPI
-          ref: main
-          path: .simapi-tool
-      - run: npm ci --prefix .simapi-tool/sdk-node
-      - run: node .simapi-tool/sdk-node/bin/simapi.js validate data/run.csv --profile arm-profile.json --no-ai --format github --report report.json --fail-on failed
+      - run: npm install -g simapi-cli@1.1.4
+      - run: simapi validate ./data/run.csv --profile ./arm-profile.json --exact-profile --no-ai --format github --report ./report.json --fail-on failed
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -93,9 +100,13 @@ const report = await client.validate(recording.rows, {
 });
 ```
 
-Profiles, `compareReports`, `repairPreview`, `parseCsv`, and `toCsv` are also exported as local utilities. The browser and CLI use the same helper implementation.
+Profiles, `compareReports`, `repairPreview`, `parseCsv`, and `toCsv` are also exported as local utilities. The browser and CLI use the same helper implementation. Use `npm install simapi-cli` to add the SDK to an application.
 
-The hosted API defaults to `https://simapilander.vercel.app/api`. Use `SIMAPI_BASE_URL` for another service. No local server or account is required by the public endpoint. Optional AI review can transmit statistics and selected sample rows to a model provider; `--no-ai` disables it.
+## Endpoint and settings
+
+Validation sends the recording to `https://simapilander.vercel.app/api` by default. Inspection, profile import, comparison, and repair run locally. The CLI runs deterministic checks by default. Opt in to AI review and text parsing with `--ai`. That setting can send statistics and selected sample rows to a model provider.
+
+Set `SIMAPI_BASE_URL` to use a different validation service. For a private endpoint that requires credentials, pass `SIMAPI_API_KEY` from your environment or pipe a key to `simapi api-key set --stdin` to store it with the local CLI config. Key displays are masked. The hosted public endpoint needs no credentials.
 
 A passing report describes the checks that ran. It does not certify hardware, policies, or safe execution.
 
