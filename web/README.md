@@ -15,6 +15,12 @@ The public site for SimAPI, built with **Next.js 15 (App Router)**, **TypeScript
 - Full SEO: metadata, OpenGraph, JSON-LD, `sitemap.ts`, `robots.ts`.
 - Dark-mode-first design system in `tailwind.config.ts` + `app/globals.css`.
 
+## CLI
+
+The landing page offers `npm install -g simapi-cli` through its **Copy** button.
+Paste the command into a terminal with Node.js 18 or later. Run `simapi` after
+installation to see the available workflows.
+
 ## Develop
 
 ```bash
