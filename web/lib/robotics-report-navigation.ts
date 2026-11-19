@@ -19,7 +19,7 @@ export function signalKey(columns: string[], signal: string | null | undefined, 
   return columns.includes(signal)
     ? signal
     : columns.find((column) => normalize(column) === normalize(signal))
-      ?? (ftc ? columns.find((column) => signal in normalizeFtcRows([{ [column]: null }])[0]) : undefined);
+      ?? (ftc ? columns.find((column) => Object.hasOwn(normalizeFtcRows([{ [column]: null }])[0], signal)) : undefined);
 }
 
 export function reportRowKeys(

@@ -284,14 +284,16 @@ export function RoboticsRunReport({
           sample is left out; passing checks does not certify a trajectory for
           hardware.
         </p>
-        <details className="mt-3 text-sm text-white/55">
-          <summary className="cursor-pointer">Engine assumptions</summary>
-          <ul className="mt-2 space-y-1">
-            {summary.assumptions.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </details>
+        {!!summary.assumptions?.length && (
+          <details className="mt-3 text-sm text-white/55">
+            <summary className="cursor-pointer">Engine assumptions</summary>
+            <ul className="mt-2 space-y-1">
+              {summary.assumptions.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     </section>
   );
