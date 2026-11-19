@@ -4,38 +4,46 @@ description: "Run SimAPI locally or install a client SDK."
 icon: "download"
 ---
 
-There are two things you might install: the **client SDK** (to call a hosted or
-self-hosted API) and the **SimAPI server** itself (for local development or a
-private deployment).
+Install a SimAPI client to validate recordings with a hosted or self-hosted
+service. The public hosted service requires no account or API key. Install the
+server itself only when you need a local or private deployment.
 
-## Client SDK
+## Python SDK
 
-<CodeGroup>
-
-```bash Python
+```bash
 pip install simapi
 ```
 
-```bash JavaScript / TypeScript
-npm install @simapi/sdk
-```
+The Python SDK calls the public hosted service without an API key. Set
+`SIMAPI_BASE_URL` for another endpoint, and `SIMAPI_API_KEY` only if that
+endpoint requires authentication.
 
-</CodeGroup>
+## Node SDK and CLI
 
-Point the SDK at your API and provide a key via environment variables:
+The Node package includes both the SDK and the hosted `simapi` CLI. Use the
+package as an application dependency:
 
 ```bash
-export SIMAPI_BASE_URL="https://simapilander.vercel.app/api"
-export SIMAPI_API_KEY="sk_live_..."
+npm install simapi-cli
 ```
+
+For the terminal command, use Node.js 18 or later:
+
+```bash
+npm install -g simapi-cli
+```
+
+The public hosted CLI needs no account, login, or API key. For a private
+service, set `SIMAPI_BASE_URL` and add `SIMAPI_API_KEY` only if authentication
+is enabled there.
 
 ## Run the server locally
 
 <Steps>
   <Step title="Clone and install">
     ```bash
-    git clone https://github.com/TaxCollector23/SimAPI-.git
-    cd SimAPI-
+    git clone https://github.com/TaxCollector23/simAPI.git
+    cd simAPI
     python -m venv .venv && source .venv/bin/activate
     pip install -r requirements.txt
     ```

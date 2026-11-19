@@ -2,31 +2,26 @@
 #   irm https://simapilander.vercel.app/install.ps1 | iex
 $ErrorActionPreference = "Stop"
 
-$repo = "https://raw.githubusercontent.com/TaxCollector23/simAPI/main"
-$dest = "$env:USERPROFILE\.simapi\bin"
+Write-Host "Installing SimAPI CLI from npm..."
 
-Write-Host "`n  Installing the SimAPI CLI..."
-
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Write-Host "  x Node.js 18+ is required but was not found." -ForegroundColor Red
-  Write-Host "    Install it from https://nodejs.org and re-run this installer.`n"
+if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+  Write-Error "Node.js 18+ (with npm) is required. Install it from https://nodejs.org, then re-run this installer."
   exit 1
 }
 
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-Invoke-WebRequest -UseBasicParsing "$repo/sdk-node/bin/simapi.js" -OutFile "$dest\simapi.js"
-
-# Shim so `simapi` resolves on PATH.
-$cmd = "@echo off`r`nnode `"$dest\simapi.js`" %*"
-Set-Content -Path "$dest\simapi.cmd" -Value $cmd -Encoding ASCII
-
-# Add to the user's PATH if not already present.
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$dest*") {
-  [Environment]::SetEnvironmentVariable("Path", "$userPath;$dest", "User")
-  $env:Path = "$env:Path;$dest"   # current session too
-  Write-Host "  + Added $dest to your PATH" -ForegroundColor Green
+try {
+  $nodeVersion = [Version](node -p "process.versions.node")
+} catch {
+  Write-Error "Could not read the installed Node.js version. Install Node.js 18+ and try again."
+  exit 1
+}
+if ($nodeVersion.Major -lt 18) {
+  Write-Error "Node.js 18+ is required; found $nodeVersion. Upgrade Node.js, then re-run this installer."
+  exit 1
 }
 
-Write-Host "  + Installed to $dest\simapi.cmd" -ForegroundColor Green
-Write-Host "`n  Open a NEW terminal, then run:  simapi login`n"
+npm install --global simapi-cli@latest
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "`nInstalled. Start with: simapi"
+Write-Host "See all commands with: simapi --help`n"

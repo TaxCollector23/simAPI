@@ -124,6 +124,19 @@ def _joint_velocity_signals(keys: set[str]) -> list[str]:
     return sorted(key for key in keys if key.startswith("joint") and key.endswith("_velocity"))
 
 
+def _finding(check: str, signal: str, episode: str, sample: int,
+             time: float | None, observed: float, expected: list[float],
+             detail: str, unit: str, measurement: str, **interval: float) -> dict[str, Any]:
+    """Carry measured quantities and their actual units into evidence."""
+    return {
+        "check": check, "status": "failed", "signal": signal,
+        "episode_id": episode, "sample_index": sample, "time": time,
+        "observed": number(observed), "expected": expected, "detail": detail,
+        "unit": unit, "measurement": measurement, "point_only": True,
+        **interval,
+    }
+
+
 class ActuatorChatterSuite:
     """Flag high-frequency oscillation in joint velocity signals.
 
@@ -164,6 +177,7 @@ class ActuatorChatterSuite:
 
         checks: list[dict[str, Any]] = []
         excluded: dict[int, list[str]] = {}
+        evidence: list[dict[str, Any]] = []
         if not velocity_signals:
             checks.append({
                 "name": "robotics_chatter:not_evaluated",
@@ -195,7 +209,7 @@ class ActuatorChatterSuite:
             flagged_windows = 0
             evaluated_episodes = 0
             cutoff_hz: float | None = None
-            for _name, indices in episodes:
+            for name, indices in episodes:
                 if time_key is None:
                     skip_reasons["missing_time"] += 1
                     continue
@@ -253,10 +267,19 @@ class ActuatorChatterSuite:
                     if total_power <= power_floor:
                         continue
                     power = np.abs(np.fft.rfft(centered)) ** 2
-                    if float(power[high_band].sum()) / float(power.sum()) > ratio_limit:
+                    ratio = float(power[high_band].sum()) / float(power.sum())
+                    if ratio > ratio_limit:
                         start = position * step
-                        flagged.extend(indices[start:start + window])
+                        end = start + window - 1
+                        flagged.extend(indices[start:end + 1])
                         flagged_windows += 1
+                        evidence.append(_finding(
+                            f"robotics_chatter:{signal}", signal, name, indices[end],
+                            float(times[end]), ratio, [0.0, float(ratio_limit)],
+                            f"Spectral power above {cutoff:g} Hz exceeds the configured ratio.",
+                            "ratio", "High-frequency power ratio",
+                            interval_start=float(times[start]), interval_end=float(times[end]),
+                        ))
                 evaluated_episodes += 1
 
             if evaluated_episodes == 0:
@@ -299,6 +322,7 @@ class ActuatorChatterSuite:
         return DynamicsSuiteResult(
             checks=checks,
             excluded=excluded,
+            evidence=evidence,
             summary={
                 "actuator_chatter": {
                     "enabled": True,
@@ -326,6 +350,7 @@ class EnergyConservationSuite:
 
         checks: list[dict[str, Any]] = []
         excluded: dict[int, list[str]] = {}
+        evidence: list[dict[str, Any]] = []
         summary: dict[str, Any] = {"enabled": True, "evaluated_signals": 0}
         if not factor > 1:
             checks.append({
@@ -369,10 +394,10 @@ class EnergyConservationSuite:
 
             velocities = _column_values(rows, signal)
             efforts = _column_values(rows, effort_signal)
-            flagged: list[int] = []
+            flagged: dict[int, dict[str, Any]] = {}
             evaluated_episodes = 0
             skipped = {"missing_time": 0, "too_few_samples": 0, "degenerate_fit": 0, "low_excitation": 0}
-            for _name, indices in episodes:
+            for name, indices in episodes:
                 if time_key is None:
                     skipped["missing_time"] += 1
                     continue
@@ -442,7 +467,18 @@ class EnergyConservationSuite:
                     bad = (np.abs(residual) > factor * scale) & (np.abs(residual) >= magnitude_floor)
                     if bad.any():
                         interval_ends = np.flatnonzero(finite)[start:end][bad] + 1
-                        flagged.extend(int(indices[end]) for end in interval_ends)
+                        for end_index, residual_value in zip(interval_ends, residual[bad], strict=True):
+                            index = indices[end_index]
+                            score = float(residual_value) / scale
+                            previous = flagged.get(index)
+                            if previous is None or abs(score) > abs(previous["observed"]):
+                                flagged[index] = _finding(
+                                    f"robotics_energy:{prefix}", signal, name, index,
+                                    float(times[end_index]), score, [-float(factor), float(factor)],
+                                    "Work and kinetic-energy change disagree in this interval.",
+                                    "×", "Normalized energy residual",
+                                    interval_start=float(times[end_index - 1]),
+                                )
                     episode_evaluated = True
                 if episode_evaluated:
                     evaluated_episodes += 1
@@ -461,7 +497,8 @@ class EnergyConservationSuite:
                 })
                 continue
             summary["evaluated_signals"] += 1
-            unique = sorted(set(flagged))
+            unique = sorted(flagged)
+            evidence.extend(flagged[index] for index in unique)
             status = "failed" if unique else "passed"
             detail = (
                 f"{len(unique)} interval(s): kinetic-energy change deviates from the episode's "
@@ -485,7 +522,8 @@ class EnergyConservationSuite:
                 )
 
         summary["anomaly_factor"] = float(factor)
-        return DynamicsSuiteResult(checks=checks, excluded=excluded, summary={"energy_conservation": summary})
+        return DynamicsSuiteResult(checks=checks, excluded=excluded, evidence=evidence,
+                                   summary={"energy_conservation": summary})
 
 
 class HumanoidContactSuite:
@@ -520,8 +558,10 @@ class HumanoidContactSuite:
         checks: list[dict[str, Any]] = []
         excluded: dict[int, list[str]] = {}
         summary: dict[str, Any] = {"enabled": True}
-
+        evidence: list[dict[str, Any]] = []
         rows = _normalized_rows(context.source_rows)
+        time_key, _group_key, episodes = _episode_slices(rows)
+        episode_by_index = {index: name for name, indices in episodes for index in indices}
         keys = set().union(*(row.keys() for row in rows)) if rows else set()
 
         if max_slip is None and max_skew_ms is None and FOOT_FORCE_KEY in conditions:
@@ -619,10 +659,15 @@ class HumanoidContactSuite:
                                 else f"No loaded {foot} sample slides faster than {slip_value:g} m/s."
                             ),
                         })
-                        for index in bad:
-                            excluded.setdefault(int(index), []).append(
-                                f"{foot} in contact but sliding above {slip_value:g} m/s"
-                            )
+                        for index in map(int, bad):
+                            detail = f"{foot} in contact but sliding above {slip_value:g} m/s"
+                            excluded.setdefault(index, []).append(detail)
+                            evidence.append(_finding(
+                                f"robotics_foot_slip:{foot}", vx_key, episode_by_index[index], index,
+                                number(rows[index].get(time_key)) if time_key else None,
+                                float(speed[index]), [0.0, slip_value], detail,
+                                "m/s", "Horizontal foot speed",
+                            ))
 
         if max_skew_ms is not None:
             skew_ms = float(max_skew_ms)
@@ -667,9 +712,15 @@ class HumanoidContactSuite:
                         else f"All samples keep camera/joint timestamp skew within {skew_ms:g} ms."
                     ),
                 })
-                for index in bad:
-                    excluded.setdefault(int(index), []).append(
-                        f"camera/joint timestamp skew above {skew_ms:g} ms"
-                    )
+                for index in map(int, bad):
+                    detail = f"camera/joint timestamp skew above {skew_ms:g} ms"
+                    excluded.setdefault(index, []).append(detail)
+                    evidence.append(_finding(
+                        "robotics_stream_skew:camera_joint", cam_key, episode_by_index[index], index,
+                        number(rows[index].get(time_key)) if time_key else float(cam[index]),
+                        float(skew[index]), [0.0, skew_ms], detail,
+                        "ms", "Camera / joint timestamp skew",
+                    ))
 
-        return DynamicsSuiteResult(checks=checks, excluded=excluded, summary={"humanoid_contact": summary})
+        return DynamicsSuiteResult(checks=checks, excluded=excluded, evidence=evidence,
+                                   summary={"humanoid_contact": summary})

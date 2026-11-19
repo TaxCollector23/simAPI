@@ -20,7 +20,9 @@ export interface Evidence {
   sample_index: number;
   time: number | null;
   interval_start?: number | null;
+  interval_end?: number | null;
   unit?: string;
+  measurement?: string;
   point_only?: boolean;
   observed: number | null;
   expected: [number, number] | null;

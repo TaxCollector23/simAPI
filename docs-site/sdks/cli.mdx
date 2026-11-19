@@ -1,97 +1,79 @@
 ---
 title: "CLI"
-description: "Validate simulations from the terminal."
+description: "Validate robot recordings from the terminal and CI."
 icon: "terminal"
 ---
 
-The `simapi` CLI validates simulation files from the terminal or CI, with a
-browser-based login flow.
+The `simapi` CLI validates robot recordings through the same hosted engine used by the playground. It works without an account, login, API key, or local server on the public service.
 
 ## Install
 
-<CodeGroup>
+Requires Node.js 18 or later.
 
-```bash curl (macOS/Linux)
-curl -fsSL https://simapilander.vercel.app/install.sh | sh
-```
-
-```powershell PowerShell (Windows)
-irm https://simapilander.vercel.app/install.ps1 | iex
-```
-
-```bash Homebrew
-brew install TaxCollector23/tap/simapi
-```
-
-```bash npm
+```bash
 npm install -g simapi-cli
 ```
 
-</CodeGroup>
+Run `simapi` for the common commands or `simapi --help` for the full list.
 
-## Log in
+## Quick start
 
 ```bash
-simapi login
+simapi
+simapi init
+simapi inspect episode.csv
+simapi validate episode.csv
 ```
 
-Opens `https://simapilander.vercel.app/auth?cli=true`, you sign in with Google or email,
-copy your API key, and paste it back in the terminal. The key is verified and saved
-to `~/.simapi/config.json`. `SIMAPI_API_KEY` overrides it in CI.
+`simapi init` creates a local `simapi.json` settings file and does not overwrite an existing one. Use CSV or JSON recordings directly, or import ROS recordings as JSON first:
 
-## Commands
-
-<CodeGroup>
-
-```bash Validate
-simapi init                      # write a sample simapi.json
-simapi validate simulation.json  # score, status, warnings, violations, time
-simapi validate run.json --type structural --json
-simapi watch simulation.json     # re-validate on every change
+```bash
+simapi import capture.mcap --list-topics
+simapi import capture.mcap --topic /joint_states --output run.json
+simapi validate run.json
 ```
 
-```bash Account
-simapi whoami                    # account, plan, masked key
-simapi usage                     # requests today/month, quota, avg time
-simapi logout
+`inspect`, `profile import`, `compare`, and `repair` run locally. Validation is sent to `https://simapilander.vercel.app/api` by default. The public hosted service requires no login or key.
+
+## Profiles
+
+Create a profile from URDF joint limits, then use it when importing or validating a run:
+
+```bash
+simapi profile import arm.urdf --name arm --output arm-profile.json
+simapi import capture.mcap --topic /joint_states --profile arm --output run.json
+simapi validate run.json --profile ./arm-profile.json
 ```
 
-```bash API keys
-simapi api-key show
-simapi api-key rotate            # new key, invalidates the old one
-simapi api-key delete
+You can also use the built-in FTC/FRC profile with `--profile ftc`. Pass `--profile` a saved profile name or a JSON profile path.
+
+## CI
+
+Use the report's **Copy CI command** action to replay the same run and profile. `--exact-profile` applies the downloaded profile settings without merging local project or recording settings.
+
+```bash
+simapi validate ./simapi-run.json --profile ./simapi-profile.json --exact-profile --no-ai --format github --report ./simapi-report.json --fail-on failed
 ```
 
-```bash Config
-simapi config                    # show current configuration
-simapi config set fail_on warning
-simapi version
-simapi help
-simapi <command> --help
+Choose `--fail-on failed` to fail only on errors, or `--fail-on warning` to fail on warnings and errors. The JSON report is written even when the chosen threshold is reached. Exit code `0` means validation completed below the threshold, `1` means the threshold was reached, and `2` means the CLI could not complete validation or save the report.
+
+`--format github` writes escaped workflow annotations to stderr. With `--json`, stdout contains only the JSON report; diagnostics remain on stderr.
+
+## Other commands
+
+```bash
+simapi profile list
+simapi compare baseline.json current.json --json --fail-on regression
+simapi repair run.json
+simapi watch run.json --profile arm
 ```
 
-</CodeGroup>
+Repair previews run locally. `--apply` writes a separate repaired file and never overwrites the input.
 
-## Report output
+## Configuration
 
-```text
-  Validation report  simulation.json
-  ──────────────────────────────────────────────
-  Validation score       35
-  Status                 FAILED
-  Warnings               0
-  Constraint violations  1
-  Physics violations     0
-  Execution time         5.1ms
+Set `SIMAPI_BASE_URL` to validate against another service. Set `SIMAPI_API_KEY` only when that service requires a key. The public hosted service needs neither. For private deployments, a key can also be saved through `simapi api-key set --stdin`; the CLI masks saved keys when showing status.
+
+```bash
+export SIMAPI_BASE_URL="http://localhost:8000/api"
 ```
-
-## Options
-
-<ParamField path="--type <domain>" type="string" default="aerodynamics">Simulation domain.</ParamField>
-<ParamField path="--json" type="flag">Print the raw JSON response.</ParamField>
-<ParamField path="--fail-on <level>" type="string">Exit non-zero on `warning` or `failed` (for CI).</ParamField>
-
-## Environment
-
-<ParamField path="SIMAPI_API_KEY" type="string">Overrides the saved key.</ParamField>
-<ParamField path="SIMAPI_BASE_URL" type="string" default="https://simapilander.vercel.app/api">API base URL.</ParamField>

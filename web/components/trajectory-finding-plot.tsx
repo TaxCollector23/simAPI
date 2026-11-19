@@ -87,7 +87,7 @@ export function TrajectoryFindingPlot({
   const timestamp = window.start === window.end
     ? `${displayNumber(window.time)} s`
     : `${displayNumber(window.start)} to ${displayNumber(window.end)} s`;
-  const name = signal ?? finding.signal;
+  const name = finding.measurement ?? signal ?? finding.signal;
 
   return (
     <figure className="mt-5 rounded-lg border border-[#d8cbb9] bg-[#f7f2e9] p-4">

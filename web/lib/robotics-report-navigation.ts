@@ -38,15 +38,16 @@ export function reportRowKeys(
 export function findingWindow(
   times: (number | null)[],
   sample: number,
-  finding: Pick<Evidence, "check" | "time" | "interval_start">,
+  finding: Pick<Evidence, "check" | "time" | "interval_start" | "interval_end">,
 ) {
   const time = numeric(finding.time);
   if (time === null) return null;
   const stepCheck = /^(robotics_derived_limit:|robotics_consistency:|robotics_energy:|robotics_sample_gaps$|robotics_time_order$)/;
   const earlier = numeric(finding.interval_start) ??
     (stepCheck.test(finding.check) ? times[sample - 1] ?? null : null);
+  const later = numeric(finding.interval_end);
   const start = Math.min(time, earlier ?? time);
-  const end = Math.max(time, earlier ?? time);
+  const end = Math.max(time, later ?? time);
   const nearby = times.slice(Math.max(0, sample - 3), sample + 4)
     .filter((value): value is number => value !== null);
   const left = Math.min(start, ...nearby);

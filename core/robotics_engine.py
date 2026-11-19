@@ -606,13 +606,9 @@ class RoboticsValidationEngine:
         for episode in summary.get("episodes", []):
             episode["flagged_samples"] = episode_counts.get(episode["episode_id"], 0)
 
-        # KinematicsSuite supplies richer computed-vs-reported sample evidence.
-        # The generic builder cannot reconstruct those values from a scalar
-        # column, so skip only that check there and append its suite evidence.
-        ordinary_checks = [
-            check for check in checks
-            if check.get("name") != "robotics_kinematics:end_effector_position"
-        ]
+        # Computed measurements come from the suite that evaluated them.
+        detailed_checks = {item["check"] for item in extra_evidence}
+        ordinary_checks = [check for check in checks if check["name"] not in detailed_checks]
         evidence = build_evidence(rows, ordinary_checks, limits, options, summary)
         if extra_evidence:
             total = evidence["total"] + len(extra_evidence)
