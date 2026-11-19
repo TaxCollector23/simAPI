@@ -1,27 +1,54 @@
+import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
+import { getFirebaseAdminAuth, getFirebaseAdminFirestore } from "@/lib/firebase-admin";
 
-/** POST /api/v1/keys/generate — issue a fresh demo API key for the playground. */
 export const runtime = "nodejs";
 
-function randomHex(bytes: number) {
-  const arr = new Uint8Array(bytes);
-  crypto.getRandomValues(arr);
-  return Array.from(arr).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export async function POST(req: Request) {
-  let label = "My Key";
+  const authorization = req.headers.get("authorization") || "";
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) return NextResponse.json({ error: "Sign in with Google to create an MCP key." }, { status: 401 });
+
+  let adminAuth: ReturnType<typeof getFirebaseAdminAuth>;
+  try {
+    adminAuth = getFirebaseAdminAuth();
+  } catch {
+    return NextResponse.json({ error: "MCP key creation is not configured on this deployment yet." }, { status: 503 });
+  }
+
+  let decoded: { uid: string };
+  try {
+    decoded = await adminAuth.verifyIdToken(match[1]);
+  } catch {
+    return NextResponse.json({ error: "Your sign-in expired. Please sign in again." }, { status: 401 });
+  }
+
+  let label = "Claude MCP";
   try {
     const body = await req.json();
-    if (body?.label) label = String(body.label);
+    if (typeof body?.label === "string" && body.label.trim()) label = body.label.trim().slice(0, 64);
   } catch {
-    /* label optional */
+    // A default label is sufficient.
   }
+
+  const apiKey = `sk_live_${randomBytes(32).toString("base64url")}`;
+  const keyHash = createHash("sha256").update(apiKey).digest("hex");
+  try {
+    await getFirebaseAdminFirestore().collection("mcpKeys").doc(keyHash).create({
+      uid: decoded.uid,
+      label,
+      prefix: apiKey.slice(0, 14),
+      createdAt: new Date(),
+      revoked: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Key creation is temporarily unavailable. Please try again later." }, { status: 503 });
+  }
+
   return NextResponse.json({
-    api_key: `sk_live_${randomHex(20)}`,
+    api_key: apiKey,
     label,
-    tier: "developer",
-    created_at: Date.now(),
-    message: "Store this key securely — it is shown only once.",
-  });
+    created_at: new Date().toISOString(),
+    message: "Store this key securely. It is shown only once.",
+  }, { headers: { "Cache-Control": "no-store" } });
 }

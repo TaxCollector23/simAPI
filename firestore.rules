@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // MCP keys are written and checked only by trusted server code. The Admin
+    // SDK bypasses these client rules; browser clients cannot read or change keys.
+    match /mcpKeys/{keyHash} {
+      allow read, write: if false;
+    }
+  }
+}

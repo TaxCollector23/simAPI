@@ -311,6 +311,30 @@ and [CLI guide](https://simapilander.vercel.app/docs/sdks/cli).
 
 ## MCP server
 
+### Claude self-service keys
+
+The Claude setup page creates a user-specific bearer key after Firebase Google
+sign-in. The web API writes only a SHA-256 hash to Firestore; the Python MCP
+service checks that hash before accepting the key. Direct browser access to the
+key collection is denied by `firestore.rules`; trusted Firebase Admin code
+bypasses those client rules.
+
+Before enabling this flow in production:
+
+1. In Firebase Authentication, enable Google and add the website's production
+   hostname under **Authorized domains** (currently `simapilander.vercel.app`).
+2. Create the Firestore database for project `simapi-dev` if it does not exist.
+3. Put the service-account JSON in the `SIMAPI_FIREBASE_SERVICE_ACCOUNT_JSON`
+   secret on both the Vercel web deployment and the Render `simapi-mcp` service.
+   The account needs Firestore read/write access. Never commit the JSON.
+4. Redeploy both services. Users create a key before adding the connector in
+   Claude; set the `authorization` request header to `Bearer sk_live_...`.
+
+The local Firebase project mapping is `simapi-dev`. Deploy the restrictive
+client rules with `firebase deploy --only firestore:rules` when the Firebase
+CLI is authenticated to that project. MCP key creation and verification use the
+Admin SDK and therefore do not require opening Firestore rules to clients.
+
 `simapi_mcp.py` exposes the robotics checks to MCP clients. Install the
 optional SDK dependency with `pip install "mcp<2"`. Local stdio mode keeps
 using the caller's local files:

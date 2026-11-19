@@ -18,6 +18,7 @@ Requires:  pip install "mcp<2" pandas
 """
 import base64
 import binascii
+import asyncio
 import hashlib
 import hmac
 import json
@@ -992,9 +993,11 @@ class MCPHTTPAuthRateLimit:
     Rate counters intentionally live in memory; deployment is single-process.
     """
 
-    def __init__(self, app, api_keys: list[str], requests_per_minute: int):
+    def __init__(self, app, api_keys: list[str], requests_per_minute: int,
+                 firebase_key_validator=None):
         self.app = app
         self.api_keys = tuple(key.encode("utf-8") for key in api_keys)
+        self.firebase_key_validator = firebase_key_validator
         self.requests_per_minute = requests_per_minute
         self._lock = threading.Lock()
         self._windows: dict[bytes, tuple[int, int]] = {}
@@ -1013,8 +1016,23 @@ class MCPHTTPAuthRateLimit:
             if name.lower() == b"authorization"
         ]
         token = self._authorized_token(authorization)
+        if token is not None and not self._matches_static_key(token):
+            if self.firebase_key_validator is None:
+                token = None
+            else:
+                try:
+                    valid = await asyncio.to_thread(self.firebase_key_validator, token.decode("utf-8"))
+                except Exception:
+                    valid = False
+                if not valid:
+                    token = None
         if token is None:
-            await self._respond(send, 401, {"error": "Unauthorized"})
+            await self._respond(
+                send,
+                401,
+                {"error": "Unauthorized"},
+                headers=[(b"www-authenticate", b'Bearer realm="SimAPI MCP"')],
+            )
             return
 
         now = time.monotonic()
@@ -1056,10 +1074,13 @@ class MCPHTTPAuthRateLimit:
         if scheme.lower() != "bearer" or not token_text.strip():
             return None
         candidate = token_text.strip().encode("utf-8")
+        return candidate
+
+    def _matches_static_key(self, candidate: bytes) -> bool:
         matched = False
         for expected in self.api_keys:
             matched = hmac.compare_digest(candidate, expected) or matched
-        return candidate if matched else None
+        return matched
 
     @staticmethod
     async def _respond(send, status: int, body: dict[str, str], headers=None):
@@ -1085,9 +1106,10 @@ def build_http_app(*, api_keys: list[str] | None = None,
     if configured is None:
         raw = os.environ.get("SIMAPI_MCP_API_KEYS", "")
         configured = [item.strip() for item in raw.split(",") if item.strip()]
-    if not configured:
+    firebase_key_validator = _firebase_key_validator()
+    if not configured and firebase_key_validator is None:
         raise RuntimeError(
-            "SIMAPI_MCP_API_KEYS must contain at least one bearer token before HTTP mode can start."
+            "SIMAPI_MCP_API_KEYS must contain at least one bearer token, or set SIMAPI_FIREBASE_SERVICE_ACCOUNT_JSON before HTTP mode can start."
         )
     limit = requests_per_minute
     if limit is None:
@@ -1110,7 +1132,42 @@ def build_http_app(*, api_keys: list[str] | None = None,
         mcp.streamable_http_app(),
         api_keys=configured,
         requests_per_minute=limit,
+        firebase_key_validator=firebase_key_validator,
     )
+
+
+def _firebase_key_validator():
+    """Return a fail-closed Firestore-backed validator when Admin credentials exist."""
+    raw_credentials = os.environ.get("SIMAPI_FIREBASE_SERVICE_ACCOUNT_JSON", "")
+    if not raw_credentials:
+        return None
+    try:
+        from firebase_admin import credentials, firestore, get_app, initialize_app
+
+        try:
+            app = get_app()
+        except ValueError:
+            service_account = json.loads(raw_credentials)
+            app = initialize_app(
+                credentials.Certificate(service_account),
+                {"projectId": service_account.get("project_id", "simapi-dev")},
+            )
+        collection = firestore.client(app=app).collection("mcpKeys")
+    except Exception as exc:
+        raise RuntimeError(
+            "SIMAPI_FIREBASE_SERVICE_ACCOUNT_JSON is invalid or Firebase Admin could not initialize."
+        ) from exc
+
+    def validate(api_key: str) -> bool:
+        if not api_key.startswith("sk_live_"):
+            return False
+        key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        snapshot = collection.document(key_hash).get()
+        if not snapshot.exists:
+            return False
+        return snapshot.to_dict().get("revoked") is not True
+
+    return validate
 
 
 if __name__ == "__main__":
