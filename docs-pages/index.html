@@ -111,18 +111,9 @@
     </div>
 
     <h2 id="install">Install the CLI</h2>
-    <p>Pick whichever fits your stack — the command installed is always <code>simapi</code>.</p>
-    <pre><code># macOS / Linux
-curl -fsSL https://simapilander.vercel.app/install.sh | sh
-
-# Windows (PowerShell)
-irm https://simapilander.vercel.app/install.ps1 | iex
-
-# Homebrew
-brew install TaxCollector23/tap/simapi
-
-# npm
-npm install -g simapi-cli</code></pre>
+    <p>Requires Node.js 18 or later. The public validator needs no account, API key, or login.</p>
+    <pre><code>npm install -g simapi-cli
+simapi</code></pre>
 
     <h2 id="quickstart">Quickstart</h2>
     <p>Validate a batch of simulation trials against the aerodynamics ruleset:</p>
@@ -223,25 +214,22 @@ print(result.training_ready)  # True</code></pre>
     <pre><code>npm install simapi-cli
 
 import { SimAPI } from "simapi-cli";
-const client = new SimAPI(process.env.SIMAPI_API_KEY);
+const client = new SimAPI();
 const result = await client.validate(rows, { simulationType: "aerodynamics" });
 if (result.status === "failed") throw new Error("Simulation rejected");</code></pre>
 
     <h2 id="cli">CLI</h2>
-    <pre><code>simapi login                 # browser sign-in, saves your key
-simapi init                  # write a sample simapi.json
-simapi validate run.json     # score, status, warnings, violations, time
-simapi watch run.json        # re-validate on change
-simapi validate run.json --fail-on warning   # non-zero exit for CI
-simapi usage                 # requests today/month, quota, avg time
-simapi api-key show|rotate|delete</code></pre>
+    <pre><code>simapi                         # common commands
+simapi --help
+simapi init
+simapi inspect run.json
+simapi validate run.json --report report.json --fail-on failed</code></pre>
 
     <h2 id="cicd">CI/CD</h2>
     <p>Turn a validation verdict into a build gate with <code>--fail-on</code>:</p>
+    <p>The public hosted service needs no key. Choose <code>--fail-on failed</code> for errors only or <code>--fail-on warning</code> to include warnings. The CLI writes its JSON report even when the threshold is reached.</p>
     <pre><code>- name: Validate simulation output
-  run: simapi validate results.json --fail-on warning
-  env:
-    SIMAPI_API_KEY: ${{ secrets.SIMAPI_API_KEY }}</code></pre>
+  run: simapi validate results.json --report report.json --fail-on warning</code></pre>
 
     <footer>
       SimAPI — the CI/CD layer for engineering simulations ·

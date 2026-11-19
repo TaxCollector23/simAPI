@@ -1,3 +1,5 @@
+import type { Evidence } from "./robotics-workflow.js";
+
 export type FtcLimits = {
   motor_power: [number, number];
   battery_voltage: [number, number];
@@ -25,5 +27,14 @@ export function validateFtcLog(rows: Record<string, unknown>[], limits?: Partial
   warnings: { name: string; detail: string }[];
   excluded_rows: Record<string, string[]>;
   episodes: { episode_id: string; samples: number; flagged_samples: number }[];
-  summary: { rows: number; flagged_rows?: number; median_dt_seconds?: number | null };
+  evidence?: Evidence[];
+  evidence_total?: number;
+  evidence_truncated?: boolean;
+  summary: {
+    rows: number;
+    flagged_rows?: number;
+    median_dt_seconds?: number | null;
+    time_column?: string | null;
+    episode_column?: string | null;
+  };
 };

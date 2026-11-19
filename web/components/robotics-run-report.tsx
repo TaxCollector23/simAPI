@@ -1,8 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { Download } from "lucide-react";
+import { ArrowUpRight, Download } from "lucide-react";
 import type { ValidationResult } from "@/lib/api";
+import { findingAnchor, findingUnits, reportRowKeys, sampleAnchor, sampleTableAnchor } from "@/lib/robotics-report-navigation";
+import { episodeOf, numeric, type Evidence, type Profile, type Row } from "@/lib/robotics-workflow.js";
+import { RoboticsCiCommand } from "./robotics-ci-command";
 
 function download(name: string, text: string, type: string) {
   const link = document.createElement("a");
@@ -16,23 +19,44 @@ function download(name: string, text: string, type: string) {
 export function RoboticsRunReport({
   result,
   rows,
+  profile,
+  onViewFinding,
 }: {
   result: ValidationResult;
-  rows: Record<string, unknown>[];
+  rows: Row[];
+  profile: Profile;
+  onViewFinding: (finding?: Evidence) => void;
 }) {
   const [evidencePage, setEvidencePage] = useState(0);
   const summary = result.robotics_summary;
   if (!summary) return null;
   const excluded = new Set(result.exclusions.map((item) => item.trial_index));
-  const group = (row: Record<string, unknown>) => {
-    const key = summary.episode_column;
-    const entry = key
-      ? Object.entries(row).find(
-          ([name]) => name.trim().toLowerCase().replace(/[ .-]/g, "_") === key,
-        )
-      : undefined;
-    return key ? String(entry?.[1] ?? "(missing episode)") : "Episode 1";
-  };
+  const columns = [...new Set(rows.flatMap(Object.keys))];
+  const { group: groupKey } = reportRowKeys(rows, columns, summary, profile.robotics_profile === "ftc");
+  const group = (row: Row) => episodeOf(row, groupKey);
+  const evidence = result.robotics_evidence ?? [];
+  const firstByCheck = new Map<string, Evidence>();
+  for (const finding of evidence) {
+    if (rows[finding.sample_index] && !firstByCheck.has(finding.check)) firstByCheck.set(finding.check, finding);
+  }
+  function viewFinding(finding?: Evidence) {
+    const hasTime = numeric(finding?.time) !== null;
+    const target = !finding ? sampleTableAnchor : hasTime ? findingAnchor : sampleAnchor;
+    return (
+      <a
+        href={`#${target}`}
+        title={finding && !hasTime ? "Timestamp unavailable. Open the original sample row." : undefined}
+        aria-label={finding ? `View ${hasTime ? "on plot" : "sample row"} for ${finding.episode_id}, sample ${finding.sample_index + 1}, ${finding.signal}` : undefined}
+        onClick={(event) => {
+          event.preventDefault();
+          onViewFinding(finding);
+        }}
+        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-medium text-accent-cyan hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+      >
+        {finding ? "View on plot" : "Inspect samples"} <ArrowUpRight size={14} aria-hidden="true" />
+      </a>
+    );
+  }
   const blocked = new Set(
     rows.filter((_, index) => excluded.has(index)).map(group),
   );
@@ -88,7 +112,7 @@ export function RoboticsRunReport({
                 <td className="py-3 pr-3 font-mono">{episode.episode_id}</td>
                 <td className="p-2 tabular-nums">{episode.samples}</td>
                 <td className="p-2 tabular-nums">
-                  {episode.duration_seconds === null
+                  {episode.duration_seconds == null
                     ? "Unavailable"
                     : `${Number(episode.duration_seconds.toPrecision(5))} s`}
                 </td>
@@ -100,13 +124,14 @@ export function RoboticsRunReport({
       </div>
       <div className="mt-5 space-y-3">
         {(result.robotics_checks ?? []).map((check) => (
-          <div key={check.name} className="flex items-start gap-3 text-sm">
+          <div key={check.name} className="flex flex-wrap items-start gap-3 text-sm">
             <span
               className={`w-16 shrink-0 ${check.status === "failed" ? "text-red-400" : check.status === "warning" ? "text-amber-400" : check.status === "info" ? "text-sky-300" : "text-pass"}`}
             >
               {check.status}
             </span>
-            <p className="min-w-0 text-white/65">{check.detail}</p>
+            <p className="min-w-0 flex-1 text-white/65">{check.detail}</p>
+            {(check.status === "failed" || check.status === "warning") && viewFinding(firstByCheck.get(check.name))}
           </div>
         ))}
       </div>
@@ -185,12 +210,16 @@ export function RoboticsRunReport({
                   <th className="p-2 font-medium">Observed</th>
                   <th className="p-2 font-medium">Expected</th>
                   <th className="p-2 font-medium">Finding</th>
+                  <th className="p-2"><span className="sr-only">Inspect finding</span></th>
                 </tr>
               </thead>
               <tbody>
                 {result.robotics_evidence
                   .slice(evidencePage * 25, (evidencePage + 1) * 25)
-                  .map((e, i) => (
+                  .map((e, i) => {
+                    const { unit } = findingUnits(e, profile.units ?? {}, summary.unit_conversions ?? {});
+                    const unitText = unit ? ` ${unit}` : "";
+                    return (
                     <tr key={i} className="border-t border-white/10">
                       <td className="p-2">
                         {e.episode_id} / {e.sample_index + 1}
@@ -203,16 +232,18 @@ export function RoboticsRunReport({
                       <td className="p-2 font-mono">
                         {e.observed === null
                           ? "Unavailable"
-                          : Number(e.observed.toPrecision(6))}
+                          : `${Number(e.observed.toPrecision(6))}${unitText}`}
                       </td>
                       <td className="p-2 font-mono">
                         {e.expected
-                          ? `${Number(e.expected[0].toPrecision(6))} to ${Number(e.expected[1].toPrecision(6))}`
-                          : "See finding"}
+                          ? `${Number(e.expected[0].toPrecision(6))} to ${Number(e.expected[1].toPrecision(6))}${unitText}`
+                          : e.expected_min !== undefined ? `At least ${e.expected_min}${unitText}` : "See finding"}
                       </td>
                       <td className="min-w-64 p-2">{e.detail}</td>
+                      <td className="p-2">{rows[e.sample_index] && viewFinding(e)}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -238,6 +269,7 @@ export function RoboticsRunReport({
           </div>
         </div>
       )}
+      <RoboticsCiCommand rows={rows} profile={profile} />
       <div className="mt-5 border-t border-white/10 pt-4">
         <button
           disabled={!accepted.length}
@@ -252,14 +284,16 @@ export function RoboticsRunReport({
           sample is left out; passing checks does not certify a trajectory for
           hardware.
         </p>
-        <details className="mt-3 text-sm text-white/55">
-          <summary className="cursor-pointer">Engine assumptions</summary>
-          <ul className="mt-2 space-y-1">
-            {summary.assumptions.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </details>
+        {!!summary.assumptions?.length && (
+          <details className="mt-3 text-sm text-white/55">
+            <summary className="cursor-pointer">Engine assumptions</summary>
+            <ul className="mt-2 space-y-1">
+              {summary.assumptions.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </details>
+        )}
       </div>
     </section>
   );

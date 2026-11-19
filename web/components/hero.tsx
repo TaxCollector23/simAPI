@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { ClaudeSpark } from "./claude-spark";
+import { CliInstall } from "./cli-install";
 import { HeroSignalChart } from "./hero-signal-chart";
 
 export function Hero() {
@@ -26,6 +27,7 @@ export function Hero() {
               <ArrowUpRight size={17} strokeWidth={1.7} />
             </Link>
           </div>
+          <CliInstall />
         </div>
         <HeroSignalChart />
       </div>

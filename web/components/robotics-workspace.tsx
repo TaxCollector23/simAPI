@@ -11,6 +11,7 @@ import {
   rowKeys,
   toCsv,
   validateProfile,
+  type Evidence,
   type Profile,
   type RepairPlan,
   type ReportDiff,
@@ -128,8 +129,10 @@ export function RoboticsWorkspace({
     [name, setName] = useState("Arm profile");
   const [library, setLibrary] = useState<Profile[]>([]),
     [savedName, setSavedName] = useState("");
-  const [result, setResult] = useState<ValidationResult | null>(null),
-    [baselineReport, setBaselineReport] = useState<unknown>(null),
+  const [completedRun, setCompletedRun] = useState<{ result: ValidationResult; profile: Profile } | null>(null);
+  const [finding, setFinding] = useState<{ evidence?: Evidence } | null>(null);
+  const result = completedRun?.result ?? null;
+  const [baselineReport, setBaselineReport] = useState<unknown>(null),
     [baselineRows, setBaselineRows] = useState<Row[]>([]),
     [baselineName, setBaselineName] = useState("");
   const [busy, setBusy] = useState(false),
@@ -168,7 +171,8 @@ export function RoboticsWorkspace({
   const revision = useRef(0);
   function invalidate() {
     revision.current++;
-    setResult(null);
+    setCompletedRun(null);
+    setFinding(null);
     setError("");
     setRepair(null);
   }
@@ -270,7 +274,8 @@ export function RoboticsWorkspace({
     setBusy(true);
     setError("");
     setNotice("");
-    setResult(null);
+    setCompletedRun(null);
+    setFinding(null);
     try {
       if (!rows.length)
         throw new Error("Load data or use the arm example first.");
@@ -288,7 +293,7 @@ export function RoboticsWorkspace({
         DEMO_KEY,
       );
       if (revision.current !== requestedRevision) return;
-      setResult(report);
+      setCompletedRun({ result: report, profile });
       recordRun(
         {
           simulationType: "robotics",
@@ -315,8 +320,6 @@ export function RoboticsWorkspace({
       setBusy(false);
     }
   }
-  const command =
-    "simapi validate run.json --profile arm-profile.json --no-ai --format github --report report.json --fail-on failed";
   const missingSignals = Object.keys(chartLimits).filter(
     (key) => rows.length && !rows.some((r) => key in r),
   );
@@ -456,6 +459,12 @@ export function RoboticsWorkspace({
               ? `${source} · ${rows.length.toLocaleString()} samples`
               : "Load a run to begin. Recordings are decoded in your browser; validation sends the extracted samples to SimAPI."}
           </p>
+        )}
+        {rows.length > 0 && (
+          <button type="button" className="mt-3 text-sm font-medium text-accent-cyan hover:underline"
+            onClick={() => download("run.csv", toCsv(rows), "text/csv")}>
+            Download run CSV
+          </button>
         )}
         <details className="mt-5">
           <summary className="cursor-pointer text-sm font-medium">
@@ -787,7 +796,11 @@ export function RoboticsWorkspace({
             baseline={baselineRows}
             limits={chartLimits}
             excluded={result?.exclusions.map((e) => e.trial_index)}
-            units={metadata.units}
+            units={completedRun?.profile.units ?? metadata.units}
+            summary={result?.robotics_summary}
+            ftc={profileKind === "ftc"}
+            finding={finding}
+            onClearFinding={() => setFinding(null)}
           />
           <div className="robotics-panel flex flex-wrap items-center gap-5 text-sm">
             <label className="cursor-pointer font-medium">
@@ -934,7 +947,7 @@ export function RoboticsWorkspace({
           </button>
         </section>
       )}
-      {result && (
+      {completedRun && result && (
         <div className="mt-8 space-y-6">
           <div className="robotics-panel">
             <h2 className="text-2xl font-medium">
@@ -954,7 +967,12 @@ export function RoboticsWorkspace({
               hardware, policies, or a trajectory for safe execution.
             </p>
           </div>
-          <RoboticsRunReport result={result} rows={rows} />
+          <RoboticsRunReport
+            result={result}
+            rows={rows}
+            profile={completedRun.profile}
+            onViewFinding={(evidence) => setFinding({ evidence })}
+          />
           <section className="robotics-panel">
             <h2 className="text-xl font-medium">Compare reports</h2>
             <div className="mt-5 flex flex-wrap items-center gap-4">
@@ -1053,56 +1071,6 @@ export function RoboticsWorkspace({
           </section>
         </div>
       )}
-      <details className="robotics-panel mt-6">
-        <summary className="cursor-pointer text-base font-medium">
-          Use these checks in the CLI or CI
-        </summary>
-        <pre className="mt-5 overflow-x-auto whitespace-pre-wrap font-mono text-sm leading-7">
-          {command}
-        </pre>
-        <div className="mt-5 flex flex-wrap gap-5 text-sm">
-          <button
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(command);
-                setNotice("Command copied.");
-              } catch {
-                setError(
-                  "Clipboard access was unavailable. Select and copy the command above.",
-                );
-              }
-            }}
-          >
-            Copy command
-          </button>
-          <button
-            onClick={() => {
-              try {
-                download(
-                  "arm-profile.json",
-                  JSON.stringify(currentProfile(), null, 2),
-                );
-              } catch (e) {
-                setError(e instanceof Error ? e.message : "Invalid profile.");
-              }
-            }}
-          >
-            Download profile
-          </button>
-          <button
-            disabled={!rows.length}
-            onClick={() => download("run.json", JSON.stringify(rows, null, 2))}
-          >
-            Download run JSON
-          </button>
-          <button
-            disabled={!rows.length}
-            onClick={() => download("run.csv", toCsv(rows), "text/csv")}
-          >
-            Download run CSV
-          </button>
-        </div>
-      </details>
     </div>
   );
 }

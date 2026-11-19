@@ -85,12 +85,6 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
   const failed = new Map();
   const warnings = new Map();
   const excluded = new Map();
-  const fail = (check, index, detail, reason) => {
-    if (!failed.has(check)) failed.set(check, []);
-    failed.get(check).push(detail);
-    if (!excluded.has(index)) excluded.set(index, []);
-    excluded.get(index).push(reason);
-  };
   if (!rows.length) {
     return { verdict: "passed", failed_checks: [], warnings: [], excluded_rows: {}, episodes: [], summary: { rows: 0 } };
   }
@@ -101,20 +95,50 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
   const headingColumns = columns.filter((column) => column === "heading_deg" || column.endsWith("_heading_deg"));
   const voltageColumn = columns.find((column) => column.includes("battery") || column === "voltage");
   const groupOf = (row) => String((episodeKey ? row[episodeKey] : "log") ?? "log");
+  const evidence = [];
+  let evidenceTotal = 0;
+  const addEvidence = (check, index, detail, signal, measurement = {}) => {
+    evidenceTotal++;
+    if (evidence.length < 1000) {
+      evidence.push({
+        check,
+        status: "failed",
+        signal,
+        episode_id: groupOf(rows[index]),
+        sample_index: index,
+        time: number(rows[index][timeKey]),
+        observed: null,
+        expected: null,
+        detail,
+        ...measurement,
+      });
+    }
+  };
+  const fail = (check, index, detail, reason, signal, measurement) => {
+    if (!failed.has(check)) failed.set(check, []);
+    failed.get(check).push(detail);
+    if (!excluded.has(index)) excluded.set(index, []);
+    excluded.get(index).push(reason);
+    addEvidence(check, index, detail, signal, measurement);
+  };
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
     for (const column of powerColumns) {
       const value = number(row[column]);
       if (value !== null && !(powerLow <= value && value <= powerHigh)) {
-        fail("power_range", index, `row ${index}: ${column}=${value} outside [${powerLow}, ${powerHigh}]`, `${column}=${value} outside [${powerLow}, ${powerHigh}]`);
+        fail("power_range", index, `row ${index}: ${column}=${value} outside [${powerLow}, ${powerHigh}]`, `${column}=${value} outside [${powerLow}, ${powerHigh}]`, column,
+          { observed: value, expected: [powerLow, powerHigh] });
       }
     }
     if (voltageColumn) {
       const value = number(row[voltageColumn]);
       if (value !== null && !(voltageLow <= value && value <= voltageHigh)) {
         if (!warnings.has("battery_voltage_range")) warnings.set("battery_voltage_range", []);
-        warnings.get("battery_voltage_range").push(`row ${index}: ${voltageColumn}=${value} outside warn band [${voltageLow}, ${voltageHigh}]`);
+        const detail = `row ${index}: ${voltageColumn}=${value} outside warn band [${voltageLow}, ${voltageHigh}]`;
+        warnings.get("battery_voltage_range").push(detail);
+        addEvidence("battery_voltage_range", index, detail, voltageColumn,
+          { status: "warning", observed: value, expected: [voltageLow, voltageHigh], unit: "V" });
       }
     }
   }
@@ -126,14 +150,16 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
     if (t0 === null || t1 === null) continue;
     const dt = t1 - t0;
     if (dt <= 0) {
-      fail("time_order", index, `row ${index}: time did not increase (${t0} -> ${t1})`, "time did not increase");
+      fail("time_order", index, `row ${index}: time did not increase (${t0} -> ${t1})`, "time did not increase", timeKey,
+        { observed: t1, interval_start: t0, expected_min: t0, unit: "s" });
       continue;
     }
     const totalPower = powerColumns.reduce((sum, column) => sum + Math.abs(number(row[column]) ?? 0), 0);
     if (voltageColumn) {
       const voltage = number(row[voltageColumn]);
       if (voltage !== null && voltage < limits.battery_sag_voltage && totalPower >= limits.sag_min_total_power) {
-        fail("battery_sag", index, `row ${index}: battery ${voltage}V below ${limits.battery_sag_voltage}V while total |power| is ${totalPower}`, `battery sag: ${voltage}V under load ${totalPower}`);
+        fail("battery_sag", index, `row ${index}: battery ${voltage}V below ${limits.battery_sag_voltage}V while total |power| is ${totalPower}`, `battery sag: ${voltage}V under load ${totalPower}`, voltageColumn,
+          { observed: voltage, expected_min: limits.battery_sag_voltage, unit: "V" });
       }
     }
     for (const column of columns) {
@@ -144,10 +170,14 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
       const velocityColumn = column.endsWith("_position") ? `${column.slice(0, -"position".length)}velocity` : null;
       const reported = velocityColumn ? number(row[velocityColumn]) : null;
       if (reported !== null && Math.abs(derived - reported) > limits.velocity_tolerance) {
-        fail("encoder_velocity", index, `row ${index}: ${column} implies ${derived}/s but ${velocityColumn} says ${reported}/s`, `encoder-derived velocity ${derived}/s disagrees with reported ${reported}/s`);
+        fail("encoder_velocity", index, `row ${index}: ${column} implies ${derived}/s but ${velocityColumn} says ${reported}/s`, `encoder-derived velocity ${derived}/s disagrees with reported ${reported}/s`, velocityColumn,
+          { observed: derived, expected: [reported - limits.velocity_tolerance, reported + limits.velocity_tolerance],
+            interval_start: t0, unit: "ticks/s" });
       }
       if (Math.abs(derived) > limits.min_moving_speed && powerColumns.length && powerColumns.every((power) => Math.abs(number(row[power]) ?? 0) < 0.05)) {
-        fail("motion_without_power", index, `row ${index}: ${column} moving at ${derived}/s with motor power ~0`, `${column} moved at ${derived}/s with no motor power`);
+        fail("motion_without_power", index, `row ${index}: ${column} moving at ${derived}/s with motor power ~0`, `${column} moved at ${derived}/s with no motor power`, column,
+          { observed: derived, expected: [-limits.min_moving_speed, limits.min_moving_speed],
+            interval_start: t0, unit: "ticks/s", point_only: true });
       }
     }
     for (const column of headingColumns) {
@@ -155,7 +185,9 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
       if (h0 === null || h1 === null) continue;
       const step = ((h1 - h0 + 180) % 360 + 360) % 360 - 180;
       if (Math.abs(step) > limits.heading_jump_deg) {
-        fail("heading_jump", index, `row ${index}: ${column} jumped ${step} degrees in one step (${h0} -> ${h1})`, `${column} jumped ${step} deg in one step`);
+        fail("heading_jump", index, `row ${index}: ${column} jumped ${step} degrees in one step (${h0} -> ${h1})`, `${column} jumped ${step} deg in one step`, column,
+          { observed: step, expected: [-limits.heading_jump_deg, limits.heading_jump_deg],
+            interval_start: t0, unit: "°", point_only: true });
       }
     }
     for (const column of columns) {
@@ -165,7 +197,11 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
       if (values.some((value) => value === null)) continue;
       const [x0, y0, x1, y1] = values;
       const speed = Math.hypot(x1 - x0, y1 - y0) / dt;
-      if (speed > limits.max_speed) fail("odometry_jump", index, `row ${index}: odometry implies speed ${speed}/s, above max ${limits.max_speed}/s`, `odometry speed ${speed}/s above max ${limits.max_speed}/s`);
+      if (speed > limits.max_speed) {
+        fail("odometry_jump", index, `row ${index}: odometry implies speed ${speed}/s, above max ${limits.max_speed}/s`,
+          `odometry speed ${speed}/s above max ${limits.max_speed}/s`, pair[0],
+          { observed: speed, expected: [0, limits.max_speed], interval_start: t0, unit: "units/s", point_only: true });
+      }
     }
   }
 
@@ -189,6 +225,15 @@ export function validateFtcLog(inputRows, limitOverrides = {}) {
     warnings: [...warnings].sort(([a], [b]) => a.localeCompare(b)).map(([name, details]) => ({ name, detail: details.slice(0, 5).join("; ") })),
     excluded_rows: Object.fromEntries([...excluded].sort(([a], [b]) => a - b).map(([index, reasons]) => [String(index), reasons])),
     episodes: [...episodes.values()],
-    summary: { rows: rows.length, flagged_rows: excluded.size, median_dt_seconds: median(intervals) },
+    evidence,
+    evidence_total: evidenceTotal,
+    evidence_truncated: evidenceTotal > evidence.length,
+    summary: {
+      rows: rows.length,
+      flagged_rows: excluded.size,
+      median_dt_seconds: median(intervals),
+      time_column: columns.includes(timeKey) ? timeKey : null,
+      episode_column: episodeKey ?? null,
+    },
   };
 }

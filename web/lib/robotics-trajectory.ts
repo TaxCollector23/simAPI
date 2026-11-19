@@ -13,6 +13,7 @@ export interface RoboticsSummary {
   time_column: string | null;
   episode_column: string | null;
   assumptions: string[];
+  unit_conversions?: Record<string, string>;
   /** Dynamics suite coverage (present when conditions requested the checks). */
   actuator_chatter?: {
     enabled: boolean;

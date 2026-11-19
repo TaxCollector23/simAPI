@@ -141,10 +141,6 @@ def validate_ftc_log(rows: list[dict[str, Any]],
     warnings: dict[str, list[str]] = {}
     excluded: dict[int, list[str]] = {}
 
-    def fail(check: str, row_idx: int, detail: str, reason: str) -> None:
-        failed.setdefault(check, []).append(detail)
-        excluded.setdefault(row_idx, []).append(reason)
-
     if not rows:
         return {
             "verdict": "failed",
@@ -169,6 +165,32 @@ def validate_ftc_log(rows: list[dict[str, Any]],
 
     time_key = find_any(TIME_KEYS) or "time"
     episode_key = find_any(EPISODE_KEYS)
+    evidence: list[dict[str, Any]] = []
+    evidence_total = 0
+
+    def group_of(row: dict[str, Any]) -> str:
+        return str(row.get(episode_key, "log")) if episode_key else "log"
+
+    def add_evidence(check: str, row_idx: int, detail: str, signal: str,
+                     *, status: str = "failed", observed: float | None = None,
+                     expected: tuple[float, float] | None = None,
+                     **metadata: Any) -> None:
+        nonlocal evidence_total
+        evidence_total += 1
+        if len(evidence) < 1000:
+            evidence.append({
+                "check": check, "status": status, "signal": signal,
+                "episode_id": group_of(rows[row_idx]), "sample_index": row_idx,
+                "time": _num(rows[row_idx].get(time_key)), "observed": observed,
+                "expected": list(expected) if expected else None, "detail": detail,
+                **metadata,
+            })
+
+    def fail(check: str, row_idx: int, detail: str, reason: str, signal: str,
+             **measurement: Any) -> None:
+        failed.setdefault(check, []).append(detail)
+        excluded.setdefault(row_idx, []).append(reason)
+        add_evidence(check, row_idx, detail, signal, **measurement)
 
     columns = sorted({k for row in rows for k in row})
     power_cols = [c for c in columns if c.endswith("_power") or c == "power"]
@@ -187,10 +209,10 @@ def validate_ftc_log(rows: list[dict[str, Any]],
 
     has_valid_time = any(_num(row.get(time_key)) is not None for row in rows)
     if not has_valid_time:
-        warnings.setdefault("time_coverage", []).append(
-            "No numeric timestamp was found; encoder, heading, battery-sag, "
-            "and odometry step checks could not run."
-        )
+        detail = ("No numeric timestamp was found; encoder, heading, battery-sag, "
+                  "and odometry step checks could not run.")
+        warnings.setdefault("time_coverage", []).append(detail)
+        add_evidence("time_coverage", 0, detail, time_key, status="warning", unit="s")
 
     has_supported_signal = bool(
         power_cols
@@ -214,6 +236,7 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                     idx,
                     f"row {idx}: {col} is missing",
                     f"{col} is missing or non-finite/non-numeric",
+                    col,
                 )
                 continue
             raw = row[col]
@@ -224,24 +247,25 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                     idx,
                     f"row {idx}: {col} must contain a finite numeric value; got {raw!r}",
                     f"{col} is missing or non-finite/non-numeric",
+                    col,
                 )
         for col in power_cols:
             v = _num(row.get(col))
             if v is not None and not (power_lo <= v <= power_hi):
                 fail("power_range", idx,
                      f"row {idx}: {col}={v:g} outside [{power_lo:g}, {power_hi:g}]",
-                     f"{col}={v:g} outside [{power_lo:g}, {power_hi:g}]")
+                     f"{col}={v:g} outside [{power_lo:g}, {power_hi:g}]", col,
+                     observed=v, expected=(power_lo, power_hi))
         if voltage_col:
             v = _num(row.get(voltage_col))
             if v is not None and not (volt_lo <= v <= volt_hi):
-                warnings.setdefault("battery_voltage_range", []).append(
-                    f"row {idx}: {voltage_col}={v:g} outside warn band "
-                    f"[{volt_lo:g}, {volt_hi:g}]")
+                detail = (f"row {idx}: {voltage_col}={v:g} outside warn band "
+                          f"[{volt_lo:g}, {volt_hi:g}]")
+                warnings.setdefault("battery_voltage_range", []).append(detail)
+                add_evidence("battery_voltage_range", idx, detail, voltage_col,
+                             status="warning", observed=v, expected=(volt_lo, volt_hi), unit="V")
 
     # --- consecutive-step checks (never across episode boundaries) ------
-    def group_of(row: dict[str, Any]) -> str:
-        return str(row.get(episode_key, "log")) if episode_key else "log"
-
     for idx in range(1, len(rows)):
         prev, row = rows[idx - 1], rows[idx]
         if group_of(prev) != group_of(row):
@@ -253,7 +277,8 @@ def validate_ftc_log(rows: list[dict[str, Any]],
         if dt <= 0:
             fail("time_order", idx,
                  f"row {idx}: time did not increase ({t0:g} -> {t1:g})",
-                 "time did not increase")
+                 "time did not increase", time_key, observed=t1, interval_start=t0,
+                 expected_min=t0, unit="s")
             continue
 
         total_power = sum(abs(_num(row.get(c)) or 0.0) for c in power_cols)
@@ -266,7 +291,8 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                 fail("battery_sag", idx,
                      f"row {idx}: battery {v:g}V below {cfg['battery_sag_voltage']:g}V "
                      f"while total |power| is {total_power:g}",
-                     f"battery sag: {v:g}V under load {total_power:g}")
+                     f"battery sag: {v:g}V under load {total_power:g}", voltage_col,
+                     observed=v, expected_min=cfg["battery_sag_voltage"], unit="V")
 
         # encoder checks: position column -> implied velocity
         for col in columns:
@@ -286,12 +312,16 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                      f"row {idx}: {col} implies {derived:g}/s but "
                      f"{vel_col} says {reported:g}/s",
                      f"encoder-derived velocity {derived:g}/s disagrees with "
-                     f"reported {reported:g}/s")
+                     f"reported {reported:g}/s", vel_col, observed=derived,
+                     expected=(reported - cfg["velocity_tolerance"], reported + cfg["velocity_tolerance"]),
+                     interval_start=t0, unit="ticks/s")
             if (abs(derived) > cfg["min_moving_speed"] and power_cols
                     and all(abs(_num(row.get(c)) or 0.0) < 0.05 for c in power_cols)):
                 fail("motion_without_power", idx,
                      f"row {idx}: {col} moving at {derived:g}/s with motor power ~0",
-                     f"{col} moved at {derived:g}/s with no motor power")
+                     f"{col} moved at {derived:g}/s with no motor power", col,
+                     observed=derived, expected=(-cfg["min_moving_speed"], cfg["min_moving_speed"]),
+                     interval_start=t0, unit="ticks/s", point_only=True)
 
         # heading: unwrap first (+179 -> -179 is a 2-degree turn, not a jump)
         for col in heading_cols:
@@ -303,7 +333,9 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                 fail("heading_jump", idx,
                      f"row {idx}: {col} jumped {step:g} degrees in one step "
                      f"({h0:g} -> {h1:g})",
-                     f"{col} jumped {step:g} deg in one step")
+                     f"{col} jumped {step:g} deg in one step", col, observed=step,
+                     expected=(-cfg["heading_jump_deg"], cfg["heading_jump_deg"]),
+                     interval_start=t0, unit="°", point_only=True)
 
         # odometry: x/y pairs imply a ground speed
         for col in columns:
@@ -322,7 +354,9 @@ def validate_ftc_log(rows: list[dict[str, Any]],
                 fail("odometry_jump", idx,
                      f"row {idx}: odometry implies speed {speed:g}/s, "
                      f"above max {cfg['max_speed']:g}/s",
-                     f"odometry speed {speed:g}/s above max {cfg['max_speed']:g}/s")
+                     f"odometry speed {speed:g}/s above max {cfg['max_speed']:g}/s", pair[0],
+                     observed=speed, expected=(0, cfg["max_speed"]), interval_start=t0,
+                     unit="units/s", point_only=True)
 
     # --- episode summary ---------------------------------------------------
     episodes: dict[str, dict[str, Any]] = {}
@@ -346,7 +380,12 @@ def validate_ftc_log(rows: list[dict[str, Any]],
         ],
         "excluded_rows": {str(i): reasons for i, reasons in sorted(excluded.items())},
         "episodes": list(episodes.values()),
+        "evidence": evidence,
+        "evidence_total": evidence_total,
+        "evidence_truncated": evidence_total > len(evidence),
         "summary": {
+            "time_column": time_key if time_key in columns else None,
+            "episode_column": episode_key,
             "rows": len(rows),
             "flagged_rows": len(excluded),
             "median_dt_seconds": _median_dt(rows, time_key),

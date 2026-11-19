@@ -71,6 +71,24 @@ def test_high_frequency_oscillation_is_flagged():
     assert any("chatter" in reason for reasons in report["excluded"].values() for reason in reasons)
 
 
+def test_chatter_evidence_points_to_the_flagged_interval_and_threshold():
+    report = _report(
+        _chirp_free_rows(chatter=True),
+        {"chatter_min_frequency_hz": 10.0, "max_chatter_power_ratio": 0.25},
+    )
+
+    evidence = next(
+        item for item in report["evidence"]["entries"]
+        if item["check"] == "robotics_chatter:joint_1_velocity"
+    )
+    assert evidence["signal"] == "joint_1_velocity"
+    assert evidence["episode_id"] == "run"
+    assert evidence["interval_start"] < evidence["time"]
+    assert evidence["expected"] == [0.0, 0.25]
+    assert evidence["unit"] == "ratio"
+    assert evidence["measurement"] == "High-frequency power ratio"
+
+
 def test_chatter_is_opt_in_and_absent_by_default():
     report = _report(_chirp_free_rows(chatter=True), {})
     assert not any(c["name"].startswith("robotics_chatter") for c in report["checks"])
@@ -113,6 +131,49 @@ def test_humanoid_foot_slip_requires_and_checks_velocity_signals():
     assert "linear_velocity_x" in check["detail"]
 
 
+def test_humanoid_foot_slip_evidence_preserves_original_row_without_valid_time():
+    rows = [{
+        "episode_id": "walk",
+        "time": "invalid",
+        "left_foot_contact_force_z": 5.0,
+        "left_foot_linear_velocity_x": 0.3,
+        "left_foot_linear_velocity_y": 0.0,
+    }]
+
+    report = _report(rows, {"max_foot_slip_mps": 0.1})
+    evidence = next(
+        item for item in report["evidence"]["entries"]
+        if item["check"] == "robotics_foot_slip:left_foot"
+    )
+    assert evidence["sample_index"] == 0
+    assert evidence["episode_id"] == "walk"
+    assert evidence["time"] is None
+    assert evidence["signal"] == "left_foot_linear_velocity_x"
+    assert evidence["observed"] == 0.3
+    assert evidence["expected"] == [0.0, 0.1]
+    assert evidence["unit"] == "m/s"
+
+
+def test_stream_skew_evidence_reports_computed_value_and_configured_limit():
+    rows = [
+        {"episode_id": "walk", "time": 0.0, "t_cam": 0.0, "t_joint": 0.0},
+        {"episode_id": "walk", "time": 0.01, "t_cam": 0.03, "t_joint": 0.01},
+    ]
+
+    report = _report(rows, {"max_sync_skew_ms": 10.0})
+    evidence = next(
+        item for item in report["evidence"]["entries"]
+        if item["check"] == "robotics_stream_skew:camera_joint"
+    )
+    assert evidence["sample_index"] == 1
+    assert evidence["time"] == 0.01
+    assert evidence["signal"] == "t_cam"
+    assert np.isclose(evidence["observed"], 20.0)
+    assert evidence["expected"] == [0.0, 10.0]
+    assert evidence["unit"] == "ms"
+    assert evidence["measurement"] == "Camera / joint timestamp skew"
+
+
 def test_chatter_with_too_few_samples_is_not_evaluated():
     rows = _chirp_free_rows(n=10, chatter=True)
     report = _report(rows, {"chatter_min_frequency_hz": 10.0})
@@ -153,6 +214,22 @@ def test_unexplained_energy_spike_is_flagged():
     assert 100 in check["indices"]
     assert any("energy" in reason or "kinetic" in reason
                for reason in report["excluded"].get(100, []))
+
+
+def test_energy_evidence_reports_residual_at_the_flagged_interval():
+    report = _report(_physics_rows(explosion_at=100), {"energy_anomaly_factor": 100.0})
+
+    evidence = next(
+        item for item in report["evidence"]["entries"]
+        if item["check"] == "robotics_energy:joint_1"
+    )
+    assert evidence["sample_index"] == 100
+    assert evidence["signal"] == "joint_1_velocity"
+    assert evidence["interval_start"] < evidence["time"]
+    assert abs(evidence["observed"]) > 100.0
+    assert evidence["expected"] == [-100.0, 100.0]
+    assert evidence["unit"] == "×"
+    assert evidence["measurement"] == "Normalized energy residual"
 
 
 def test_energy_check_is_opt_in_and_absent_by_default():

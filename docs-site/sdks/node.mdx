@@ -16,8 +16,10 @@ npm install simapi-cli
 
 ```bash
 export SIMAPI_BASE_URL="https://simapilander.vercel.app/api"
-export SIMAPI_API_KEY="sk_live_..."
 ```
+
+The public service needs no API key. Set `SIMAPI_API_KEY` only when your
+self-hosted endpoint requires authentication.
 
 ## Validate
 
@@ -26,7 +28,7 @@ export SIMAPI_API_KEY="sk_live_..."
 ```ts TypeScript
 import { SimAPI, type ValidationResult } from "simapi-cli";
 
-const client = new SimAPI(process.env.SIMAPI_API_KEY!);
+const client = new SimAPI();
 
 const result: ValidationResult = await client.validate(rows, {
   simulationType: "aerodynamics",
@@ -40,7 +42,7 @@ console.log(result.trials_valid, "/", result.trials_submitted, "valid");
 ```js JavaScript
 import { SimAPI } from "simapi-cli";
 
-const client = new SimAPI(process.env.SIMAPI_API_KEY);
+const client = new SimAPI();
 const result = await client.validate(rows, { simulationType: "structural" });
 console.log(result.status);
 ```
@@ -58,7 +60,8 @@ const result = await client.validateFile("simulation.json", {
 ## Configuration
 
 <ParamField path="new SimAPI(apiKey)" type="string">
-  Pass the key directly, or omit it to read <code>SIMAPI_API_KEY</code>.
+  Optional. Pass a key only when the endpoint requires authentication; the
+  public hosted service does not need one.
 </ParamField>
 <ParamField path="new SimAPI(config)" type="object">
   <code>{`{ apiKey, baseUrl, timeoutMs }`}</code> for full control.

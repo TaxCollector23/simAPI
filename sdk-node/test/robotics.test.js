@@ -373,7 +373,7 @@ test("CLI profiles/import/CI gating/comparison/repair work together without chan
   assert.equal(JSON.parse(r.out).repaired_samples, 2);
   assert.match(await readFile(broken, "utf8"), /a,0,0\na,0,0/);
   r = await cli(["repair", broken, "--apply", "--output", broken], env);
-  assert.equal(r.code, 1);
+  assert.equal(r.code, 2);
   assert.match(await readFile(broken, "utf8"), /a,0,0\na,0,0/);
 });
 
@@ -420,6 +420,19 @@ test("FTC/FRC profile flags power 1.4 and accepts a wrapped heading", () => {
   assert.equal(report.verdict, "failed");
   assert.deepEqual(report.failed_checks.map((check) => check.name), ["power_range"]);
   assert.equal(report.excluded_rows["1"][0], "left_motor_power=1.4 outside [-1, 1]");
+  assert.deepEqual(report.evidence[0], {
+    check: "power_range",
+    status: "failed",
+    signal: "left_motor_power",
+    episode_id: "log",
+    sample_index: 1,
+    time: 0.1,
+    observed: 1.4,
+    expected: [-1, 1],
+    detail: "row 1: left_motor_power=1.4 outside [-1, 1]",
+  });
+  assert.equal(report.evidence_total, 1);
+  assert.equal(report.summary.time_column, "time");
   assert.ok(!report.failed_checks.some((check) => check.name === "heading_jump"));
   assert.equal(resolveFtcProfile("frc").robotics_profile, "ftc");
   assert.deepEqual(resolveFtcProfile("ftc").ftc_limits.motor_power, [-1, 1]);

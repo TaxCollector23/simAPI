@@ -97,9 +97,15 @@ export default function DocsPage() {
           <h2 className="text-2xl font-medium">Read the evidence</h2>
           <p className="mt-4 text-base leading-7">
             Findings identify the episode, sample, time, signal, observed value,
-            and expected range. Derivatives are interval averages. Missing
-            information is reported as unavailable. A passing report supports
-            engineering review and does not certify hardware or a policy.
+            and expected range. Choose <strong>View on plot</strong> to zoom to
+            the affected sample or interval. If the timestamp is unavailable,
+            the link opens the original sample row.
+          </p>
+          <p className="mt-4 text-base leading-7">
+            In a completed run report, choose when CI should fail and select
+            <strong> Copy CI command</strong>. Save the downloaded run and
+            profile at your repository root. The command repeats the checks
+            with the same settings and writes <code>simapi-report.json</code>.
           </p>
         </section>
       </div>

@@ -1,11 +1,8 @@
 name: Publish to npm
 
-# Trusted publishing (OIDC) — no npm token or 2FA prompt. Publishes the
-# `simapi` package (sdk-node) to npm using GitHub's OIDC identity.
-#
-# One-time setup on npmjs.com → simapi → Settings → Trusted Publisher:
+# npm trusted publisher settings for simapi-cli:
 #   Organization or user: TaxCollector23
-#   Repository:           SimAPI-YC-
+#   Repository:           simAPI
 #   Workflow filename:    publish-npm.yml
 #   Environment:          (leave blank)
 
@@ -28,10 +25,24 @@ jobs:
         with:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: sdk-node/package-lock.json
 
       # Trusted publishing requires npm >= 11.5.1.
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
+
+      - name: Install dependencies
+        working-directory: sdk-node
+        run: npm ci
+
+      - name: Test CLI
+        working-directory: sdk-node
+        run: npm test
+
+      - name: Validate package
+        working-directory: sdk-node
+        run: npm pack --dry-run
 
       - name: Publish (OIDC)
         working-directory: sdk-node

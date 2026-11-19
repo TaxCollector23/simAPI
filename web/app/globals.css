@@ -113,6 +113,7 @@ body:has(.landing-page) { background: #f6f3ec; color: #24241f; }
 .landing-button-primary:hover { background: #3a3a32; }
 .landing-button-secondary { border: 1px solid #aaa69c; color: var(--ink); }
 .landing-button-secondary:hover { background: #ebe7dd; }
+.landing-install-copy { min-height: 44px; gap: 6px; padding-inline: 8px; font-size: 14px; }
 
 .landing-page section:not(.landing-hero) { border-color: var(--line); }
 .landing-page .text-white, .landing-page h2, .landing-page h3, .landing-page th { color: var(--ink) !important; }
