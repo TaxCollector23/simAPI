@@ -3,6 +3,8 @@
 .env.local.rtf
 *.pem
 *.key
+*-service-account*.json
+service-account.json
 
 # Python
 __pycache__/

@@ -105,6 +105,26 @@ def test_http_healthz_is_public_but_mcp_requires_auth():
     protected = client.post("/mcp", headers=_headers(), json={})
     assert protected.status_code == 401
     assert protected.json() == {"error": "Unauthorized"}
+    assert protected.headers["www-authenticate"].startswith("Bearer")
+    client.close()
+
+
+def test_http_accepts_firestore_validated_keys():
+    async def ok_app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    app = server.MCPHTTPAuthRateLimit(
+        ok_app,
+        [],
+        10,
+        firebase_key_validator=lambda token: token == "firestore-key",
+    )
+    client = TestClient(app)
+    accepted = client.get("/mcp", headers=_headers("firestore-key"))
+    rejected = client.get("/mcp", headers=_headers("unknown-key"))
+    assert accepted.status_code == 204
+    assert rejected.status_code == 401
     client.close()
 
 
