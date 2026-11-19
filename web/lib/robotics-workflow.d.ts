@@ -19,8 +19,12 @@ export interface Evidence {
   episode_id: string;
   sample_index: number;
   time: number | null;
+  interval_start?: number | null;
+  unit?: string;
+  point_only?: boolean;
   observed: number | null;
   expected: [number, number] | null;
+  expected_min?: number;
   detail: string;
 }
 export interface RepairPlan {

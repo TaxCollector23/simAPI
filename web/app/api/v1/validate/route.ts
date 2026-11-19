@@ -165,8 +165,6 @@ function mapFtcReport(report: ReturnType<typeof validateFtcLog>, rows: Record<st
     detail: issue.detail,
     violations: 1,
   }));
-  const timeColumn = ["time", "t", "timestamp", "elapsed_time"].find((key) => rows.some((row) => key in row)) ?? null;
-  const episodeColumn = ["episode_id", "episode", "match", "segment"].find((key) => rows.some((row) => key in row)) ?? null;
   return {
     job_id: jobId,
     status,
@@ -195,11 +193,14 @@ function mapFtcReport(report: ReturnType<typeof validateFtcLog>, rows: Record<st
     checks_by_category: { ftc_frc: { passed: allChecks - failedCount - warnings, warning: warnings, failed: failedCount } },
     columns_renamed: {},
     robotics_checks: roboticsChecks,
+    robotics_evidence: report.evidence?.map((finding) => ({ ...finding, check: `ftc_frc:${finding.check}` })) ?? [],
+    robotics_evidence_total: report.evidence_total ?? 0,
+    robotics_evidence_truncated: report.evidence_truncated ?? false,
     robotics_summary: {
       engine_version: "ftc-frc-1",
       episodes: report.episodes,
-      time_column: timeColumn,
-      episode_column: episodeColumn,
+      time_column: report.summary.time_column ?? null,
+      episode_column: report.summary.episode_column ?? null,
       assumptions: ["Motor power is bounded to the configured range.", "Heading wraps through +/-180 degrees before jump checks."],
       profile: "FTC / FRC",
       ftc_summary: report.summary,
@@ -391,7 +392,7 @@ export async function POST(req: Request) {
           profile,
         );
 
-  const evidence = simType === "robotics" ? buildEvidence(
+  const evidence = simType === "robotics" && !Array.isArray(result.robotics_evidence) ? buildEvidence(
     rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [canonical(key), value]))),
     result.robotics_checks ?? [], roboticsEvidenceLimits(rows, body.robotics_limits), body.conditions ?? {},
   ) : null;

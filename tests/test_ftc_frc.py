@@ -84,3 +84,37 @@ def test_ftc_encoder_ticks_are_checked_against_reported_velocity():
     assert inconsistent["verdict"] == "failed"
     assert "encoder_velocity" in {check["name"] for check in inconsistent["failed_checks"]}
     assert inconsistent["excluded_rows"]["1"]
+
+
+def test_ftc_findings_include_original_row_location_and_measured_values():
+    report = validate_ftc_log([
+        {"Match": "red", "time": 0.25, "leftMotorPower": 1.4, "Battery V": 9.2},
+        {"Match": "red", "time": "invalid", "leftMotorPower": 1.5, "Battery V": 13.0},
+    ])
+    evidence = {(entry["check"], entry["sample_index"]): entry for entry in report["evidence"]}
+    timed = evidence[("power_range", 0)]
+    assert (timed["episode_id"], timed["signal"], timed["time"], timed["observed"]) == (
+        "red", "left_motor_power", 0.25, 1.4,
+    )
+    assert timed["expected"] == [-1.0, 1.0]
+    assert evidence[("power_range", 1)]["time"] is None
+    voltage = evidence[("battery_voltage_range", 0)]
+    assert voltage["status"] == "warning"
+    assert voltage["unit"] == "V"
+    assert voltage["observed"] == 9.2
+    assert report["summary"]["episode_column"] == "match"
+    assert report["evidence_total"] == len(report["evidence"])
+    assert not report["evidence_truncated"]
+
+
+def test_ftc_derived_finding_records_interval_and_tolerance():
+    report = validate_ftc_log([
+        {"time": 2.0, "left_encoder_ticks": 0, "left_encoder_velocity": 0},
+        {"time": 2.5, "left_encoder_ticks": 0, "left_encoder_velocity": 100},
+    ])
+    entry = next(item for item in report["evidence"] if item["check"] == "encoder_velocity")
+    assert entry["interval_start"] == 2.0
+    assert entry["time"] == 2.5
+    assert entry["observed"] == 0.0
+    assert entry["expected"] == [50.0, 150.0]
+    assert entry["unit"] == "ticks/s"

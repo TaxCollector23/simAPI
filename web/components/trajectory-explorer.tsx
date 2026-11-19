@@ -1,13 +1,25 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   episodeOf,
   numeric,
   rowKeys,
+  type Evidence,
   type Row,
 } from "@/lib/robotics-workflow.js";
 
+import {
+  findingAnchor,
+  findingUnits,
+  reportRowKeys,
+  sampleAnchor,
+  sampleTableAnchor,
+  signalKey,
+} from "@/lib/robotics-report-navigation";
+import { FindingValues, TrajectoryFindingPlot } from "./trajectory-finding-plot";
+
+const samplesPerPage = 100;
 const colors = ["#34372f", "#a95624", "#38664d", "#70523d"];
 export function TrajectoryExplorer({
   rows,
@@ -15,19 +27,33 @@ export function TrajectoryExplorer({
   limits,
   excluded = [],
   units = {},
+  summary,
+  ftc = false,
+  finding,
+  onClearFinding,
 }: {
   rows: Row[];
   baseline?: Row[];
   limits: Record<string, [number, number]>;
   excluded?: number[];
   units?: Record<string, string>;
+  summary?: {
+    time_column?: string | null;
+    episode_column?: string | null;
+    unit_conversions?: Record<string, string>;
+  };
+  ftc?: boolean;
+  finding?: { evidence?: Evidence } | null;
+  onClearFinding?: () => void;
 }) {
-  const keys = useMemo(() => rowKeys(rows), [rows]);
+  const columns = useMemo(() => [...new Set(rows.flatMap(Object.keys))], [rows]);
+  const keys = useMemo(() => reportRowKeys(rows, columns, summary, ftc), [rows, columns, summary, ftc]);
   const baseKeys = useMemo(
     () => rowKeys(baseline.length ? baseline : rows),
     [baseline, rows],
   );
-  const episodes = [...new Set(rows.map((r) => episodeOf(r, keys.group)))];
+  const currentEpisode = (row: Row) => ftc && !keys.group ? "log" : episodeOf(row, keys.group);
+  const episodes = [...new Set(rows.map(currentEpisode))];
   const baseEpisodes = [
     ...new Set(baseline.map((r) => episodeOf(r, baseKeys.group))),
   ];
@@ -35,7 +61,17 @@ export function TrajectoryExplorer({
     [baseEpisode, setBaseEpisode] = useState(""),
     [selection, setSelection] = useState<string[]>([]),
     [page, setPage] = useState(0);
-  const signals = [...new Set(rows.flatMap(Object.keys))].filter(
+  const [focusedPage, setFocusedPage] = useState<{ finding: typeof finding; page: number } | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const sampleRef = useRef<HTMLTableRowElement>(null);
+  const sampleDetailsRef = useRef<HTMLDetailsElement>(null);
+  const sampleSummaryRef = useRef<HTMLElement>(null);
+  const evidence = finding?.evidence;
+  const timedFinding = evidence ? numeric(evidence.time) !== null : false;
+  const originalRow = evidence ? rows[evidence.sample_index] : undefined;
+  const focusedSignal = evidence ? signalKey(columns, evidence.signal, ftc) : undefined;
+  const conversions = summary?.unit_conversions ?? {};
+  const signals = columns.filter(
     (key) =>
       key !== keys.time &&
       key !== keys.group &&
@@ -46,12 +82,12 @@ export function TrajectoryExplorer({
     .filter((s): s is string => Boolean(s))
     .slice(0, 4);
   const knownSelection = selection.filter((s) => signals.includes(s));
-  const selected = knownSelection.length
-    ? knownSelection
-    : suggested.length
-      ? suggested
-      : signals.slice(0, 1);
-  const currentId = episodes.includes(episode) ? episode : episodes[0],
+  const selected = evidence && focusedSignal ? [focusedSignal]
+    : knownSelection.length ? knownSelection
+    : suggested.length ? suggested
+    : signals.slice(0, 1);
+  const currentId = originalRow ? currentEpisode(originalRow)
+    : episodes.includes(episode) ? episode : episodes[0],
     baseId = baseline.length
       ? baseEpisodes.includes(baseEpisode)
         ? baseEpisode
@@ -59,10 +95,10 @@ export function TrajectoryExplorer({
       : baseEpisode;
   const active = rows
     .map((r, i) => ({ row: r, index: i }))
-    .filter(({ row }) => episodeOf(row, keys.group) === currentId);
+    .filter(({ row }) => currentEpisode(row) === currentId);
   const activeRows = active.map((v) => v.row);
   const comparison = (baseline.length ? baseline : rows).filter(
-    (r) => Boolean(baseId) && episodeOf(r, baseKeys.group) === baseId,
+    (r) => !evidence && Boolean(baseId) && episodeOf(r, baseKeys.group) === baseId,
   );
   const excludedSet = new Set(excluded);
   const validTiming = (data: Row[], key?: string) =>
@@ -88,12 +124,43 @@ export function TrajectoryExplorer({
       : 0,
   );
   const x = (v: number) => 52 + (v / maxX) * 636;
-  const pageCount = Math.max(1, Math.ceil(active.length / 100)),
-    safePage = Math.min(page, pageCount - 1);
+  const sampleInEpisode = evidence ? active.findIndex(({ index }) => index === evidence.sample_index) : -1;
+  const showFindingRow = Boolean(evidence && !timedFinding && sampleInEpisode >= 0);
+  const pageCount = Math.max(1, Math.ceil(active.length / samplesPerPage));
+  const activePage = showFindingRow
+    ? focusedPage?.finding === finding ? focusedPage?.page ?? 0 : Math.floor(sampleInEpisode / samplesPerPage)
+    : page;
+  const safePage = Math.min(activePage, pageCount - 1);
+  const sampleColumns = showFindingRow && originalRow
+    ? [...new Set([...Object.keys(originalRow), ...(focusedSignal ? [focusedSignal] : [])])]
+        .filter((column) => column !== keys.time)
+    : selected;
+
+  useEffect(() => {
+    if (!finding) return;
+    const row = sampleRef.current;
+    if ((row || !finding.evidence) && sampleDetailsRef.current) sampleDetailsRef.current.open = true;
+    const target = row ?? (finding.evidence ? headingRef.current : sampleSummaryRef.current);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView({ block: "start", inline: "nearest" });
+  }, [finding]);
+
+  function endFinding() {
+    if (!evidence) return;
+    setEpisode(currentId);
+    setSelection(focusedSignal ? [focusedSignal] : []);
+    setPage(safePage);
+    onClearFinding?.();
+  }
+
+  function changePage(next: number) {
+    if (showFindingRow) setFocusedPage({ finding, page: next });
+    else setPage(next);
+  }
   return (
-    <section aria-label="Trajectory explorer" className="robotics-panel">
+    <section aria-label="Trajectory explorer" className="robotics-panel scroll-mt-24">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <h2 className="text-xl font-medium">Trajectories</h2>
+        <h2 id={findingAnchor} ref={headingRef} tabIndex={-1} className="scroll-mt-24 text-xl font-medium">Trajectories</h2>
         <div className="flex flex-wrap gap-3">
           {episodes.length > 0 && (
             <label className="flex items-center gap-2 text-sm">
@@ -101,6 +168,7 @@ export function TrajectoryExplorer({
               <select
                 value={currentId}
                 onChange={(e) => {
+                  endFinding();
                   setEpisode(e.target.value);
                   setPage(0);
                 }}
@@ -116,7 +184,10 @@ export function TrajectoryExplorer({
               Compare
               <select
                 value={baseId}
-                onChange={(e) => setBaseEpisode(e.target.value)}
+                onChange={(e) => {
+                  endFinding();
+                  setBaseEpisode(e.target.value);
+                }}
               >
                 {baseEpisodes.map((id) => (
                   <option key={id}>{id}</option>
@@ -129,7 +200,10 @@ export function TrajectoryExplorer({
               Compare episode
               <select
                 value={baseEpisode}
-                onChange={(e) => setBaseEpisode(e.target.value)}
+                onChange={(e) => {
+                  endFinding();
+                  setBaseEpisode(e.target.value);
+                }}
               >
                 <option value="">None</option>
                 {episodes.map((id) => (
@@ -141,7 +215,15 @@ export function TrajectoryExplorer({
         </div>
       </div>
       <>
-        <fieldset className="mt-5 flex flex-wrap gap-x-5 gap-y-3">
+        {evidence && (
+          <div className="mt-5 flex flex-wrap items-baseline justify-between gap-3 border-b border-white/10 pb-3 text-sm">
+            <p>Finding in <strong>{evidence.episode_id}</strong> · sample {evidence.sample_index + 1}</p>
+            <button type="button" onClick={endFinding} className="font-medium text-accent-cyan hover:underline">
+              {timedFinding ? "Show full episode" : "Clear finding"}
+            </button>
+          </div>
+        )}
+        {!evidence && <fieldset className="mt-5 flex flex-wrap gap-x-5 gap-y-3">
           <legend className="sr-only">Displayed signals, up to four</legend>
           {signals.map((signal) => (
             <label
@@ -167,14 +249,31 @@ export function TrajectoryExplorer({
               {signal}
             </label>
           ))}
-        </fieldset>
+        </fieldset>}
+        {evidence && timedFinding && (
+          <TrajectoryFindingPlot
+            finding={evidence}
+            rows={activeRows}
+            times={activeRows.map((row) => keys.time ? numeric(row[keys.time]) : null)}
+            sample={sampleInEpisode}
+            signal={focusedSignal}
+            units={units}
+            conversions={conversions}
+          />
+        )}
+        {showFindingRow && evidence && (
+          <div className="mt-4">
+            <p className="text-sm">{evidence.signal} · Timestamp unavailable</p>
+            <FindingValues finding={evidence} unit={findingUnits(evidence, units, conversions).unit} />
+          </div>
+        )}
         {comparison.length > 0 && (
           <p className="mt-4 text-sm">
             Solid: current run · dashed: comparison · aligned by{" "}
             {timed ? "elapsed time" : "sample index"}
           </p>
         )}
-        {selected.map((signal, number) => {
+        {!evidence && selected.map((signal, number) => {
           const range = limits[signal],
             all = [
               ...active.map((v) => numeric(v.row[signal])),
@@ -314,8 +413,13 @@ export function TrajectoryExplorer({
           <p className="mt-5 text-base">Load data to inspect joint motion.</p>
         )}
         {!!active.length && (
-          <details className="mt-6">
-            <summary className="cursor-pointer text-sm font-medium">
+          <details
+            key={showFindingRow ? sampleAnchor : "sample-values"}
+            ref={sampleDetailsRef}
+            className="mt-6"
+            open={showFindingRow || undefined}
+          >
+            <summary id={sampleTableAnchor} ref={sampleSummaryRef} className="cursor-pointer scroll-mt-24 text-sm font-medium">
               Inspect sample values
             </summary>
             <div className="mt-4 overflow-x-auto">
@@ -324,7 +428,7 @@ export function TrajectoryExplorer({
                   <tr>
                     <th className="p-2">Sample</th>
                     <th className="p-2">Time</th>
-                    {selected.map((s) => (
+                    {sampleColumns.map((s) => (
                       <th className="p-2" key={s}>
                         {s}
                       </th>
@@ -333,29 +437,40 @@ export function TrajectoryExplorer({
                 </thead>
                 <tbody>
                   {active
-                    .slice(safePage * 100, (safePage + 1) * 100)
-                    .map(({ row, index }) => (
-                      <tr key={index} className="border-t border-white/10">
-                        <td className="p-2">{index + 1}</td>
-                        <td className="p-2">
-                          {keys.time
-                            ? String(row[keys.time] ?? "Unavailable")
-                            : "Unavailable"}
-                        </td>
-                        {selected.map((s) => (
-                          <td key={s} className="p-2">
-                            {String(row[s] ?? "Unavailable")}
+                    .slice(safePage * samplesPerPage, (safePage + 1) * samplesPerPage)
+                    .map(({ row, index }) => {
+                      const highlighted = showFindingRow && index === evidence?.sample_index;
+                      return (
+                      <tr
+                        key={index}
+                        id={highlighted ? sampleAnchor : undefined}
+                        ref={highlighted ? sampleRef : undefined}
+                        tabIndex={highlighted ? -1 : undefined}
+                        className={highlighted
+                          ? "scroll-mt-24 border-t border-[#d8cbb9] bg-[#f5e8d7]"
+                          : "border-t border-white/10"}
+                      >
+                          <td className="p-2">{index + 1}</td>
+                          <td className="p-2">
+                            {keys.time
+                              ? String(row[keys.time] ?? "Unavailable")
+                              : "Unavailable"}
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {sampleColumns.map((s) => (
+                            <td key={s} className="p-2">
+                              {String(row[s] ?? "Unavailable")}
+                            </td>
+                          ))}
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
             <div className="mt-4 flex gap-4 text-sm">
               <button
                 disabled={!safePage}
-                onClick={() => setPage(safePage - 1)}
+                onClick={() => changePage(safePage - 1)}
               >
                 Previous
               </button>
@@ -364,7 +479,7 @@ export function TrajectoryExplorer({
               </span>
               <button
                 disabled={safePage + 1 >= pageCount}
-                onClick={() => setPage(safePage + 1)}
+                onClick={() => changePage(safePage + 1)}
               >
                 Next
               </button>

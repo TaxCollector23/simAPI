@@ -13,7 +13,6 @@ import { PreflightPanel } from "./preflight-panel";
 import { HistoryPanel } from "./history-panel";
 import { DimensionalResultPanel } from "./dimensional-result-panel";
 import { RoboticsWorkspace } from "./robotics-workspace";
-import { RoboticsRunReport } from "./robotics-run-report";
 import { RoboticsPlaygroundTools, toRoboticsLimits, type RobotLimitDraft } from "./robotics-playground-tools";
 import { recordRun } from "@/lib/run-history";
 import {
@@ -313,7 +312,6 @@ export function ValidationDashboard() {
     Object.fromEntries(simConfig.conditions.map(c => [c.key, c.default]))
   );
   const [rawInput,  setRawInput]    = useState(JSON.stringify(simConfig.example, null, 2));
-  const [validatedRows, setValidatedRows] = useState<Record<string, unknown>[]>([]);
   const [robotLimitDrafts, setRobotLimitDrafts] = useState<RobotLimitDraft[]>([]);
   const [phase,     setPhase]       = useState<"idle"|"running"|"done"|"error">("idle");
   const [engineMode, setEngineMode] = useState<"legacy"|"dimensional">("legacy");
@@ -412,7 +410,6 @@ export function ValidationDashboard() {
         if (selectedSim.value === "robotics") {
           const data = selectedSim.example as Record<string, unknown>[];
           setRawInput(JSON.stringify(data, null, 2));
-          setValidatedRows(data);
           res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true, ...(roboticsLimits && Object.keys(roboticsLimits).length ? { robotics_limits: roboticsLimits } : {}) }, DEMO_KEY);
         } else {
           res = await runDemo();
@@ -422,7 +419,6 @@ export function ValidationDashboard() {
         try { data = JSON.parse(rawInput); }
         catch { throw new Error("Invalid JSON. Check your input above."); }
         if (!Array.isArray(data)) throw new Error("Input must be a JSON array: [{...}, {...}, ...]");
-        setValidatedRows(data);
         res = await validate({ data, simulation_type: selectedSim.value, conditions, run_ai: true, ...(roboticsLimits && Object.keys(roboticsLimits).length ? { robotics_limits: roboticsLimits } : {}) }, DEMO_KEY);
       }
       setResult(res); setPhase("done");
@@ -870,7 +866,6 @@ export function ValidationDashboard() {
                   </div>
                 </div>
 
-                {selectedSim.value === "robotics" && <RoboticsRunReport result={result} rows={validatedRows} />}
 
                 {/* Concrete fixes -- plain language, specific to this dataset */}
                 {result.concrete_fixes && result.concrete_fixes.length > 0 && (
